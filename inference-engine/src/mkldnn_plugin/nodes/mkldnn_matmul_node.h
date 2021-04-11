@@ -34,6 +34,7 @@ public:
     size_t getChannelAxis() const override {
         return getOutputShapeAtPort(0).getRank() - 1;
     }
+    const std::vector<impl_desc_type>& getPrimitivesPriority() override;
 
     static bool isSupportedOperation(const std::shared_ptr<const ngraph::Node>& op, std::string& errorMessage) noexcept;
     std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() override;
