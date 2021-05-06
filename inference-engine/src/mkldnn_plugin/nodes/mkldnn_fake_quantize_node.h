@@ -90,6 +90,8 @@ public:
     const std::vector<float>& getOutputScale() const { return outputScale; }
     const std::vector<float>& getOutputShift() const { return outputShift; }
 
+    const std::vector<float>& getFQScales() const { return fqScales; }
+
     void setCropLow(std::vector<float> newCropLow) { cropLow = std::move(newCropLow); isPostOpDataInitialized = false; }
     void setCropHigh(std::vector<float> newCropHigh) { cropHigh = std::move(newCropHigh); isPostOpDataInitialized = false; }
     void setInputScale(std::vector<float> newInputScale) { inputScale = std::move(newInputScale); isPostOpDataInitialized = false; }
@@ -143,6 +145,8 @@ private:
     size_t inputShiftSize;
     size_t outputScaleSize;
     size_t outputShiftSize;
+
+    std::vector<float> fqScales;
 
     // mkldnn style post ops data representation
     bool isPostOpDataInitialized = false;
