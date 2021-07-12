@@ -64,6 +64,7 @@
 #include <transformations/op_conversions/fq_decomposition.hpp>
 #include <transformations/utils/utils.hpp>
 
+#include <ngraph/opsets/opset1.hpp>
 #include <ngraph/opsets/opset2.hpp>
 #include <ngraph/opsets/opset3.hpp>
 #include <ngraph/opsets/opset4.hpp>
@@ -90,6 +91,7 @@
 #include "nodes/mkldnn_fake_quantize_node.h"
 #include "nodes/mkldnn_normalize_node.h"
 #include "ngraph_transformations/convert_to_cpu_specific_opset.hpp"
+#include "transformations/smart_reshape/smart_reshape.hpp"
 
 #if !defined(__arm__) && !defined(_M_ARM) && !defined(__aarch64__) && !defined(_M_ARM64)
 # ifdef _WIN32
@@ -169,7 +171,7 @@ static void Transformation(CNNNetwork& clonedNetwork, const Config& conf) {
     manager.register_pass<ngraph::pass::ConvertNMSToNMSIEInternal>();
     manager.register_pass<ngraph::pass::ConvertMulticlassNmsToMulticlassNmsIE>();
     manager.register_pass<ngraph::pass::ConvertMatrixNmsToMatrixNmsIE>();
-    manager.register_pass<ngraph::pass::TransposeMatMul>();
+    manager.register_pass<ngraph::pass::SmartReshape>();
     manager.register_pass<ngraph::pass::ConstantFolding>();
 
     if (useLpt) {
@@ -355,6 +357,10 @@ static void Transformation(CNNNetwork& clonedNetwork, const Config& conf) {
             OperationPrecisionRestriction::create<ngraph::opset1::Multiply>({
                 {0, {ngraph::element::u8}},
                 {1, {ngraph::element::i8}},
+            }),
+            OperationPrecisionRestriction::create<ngraph::opset1::MatMul>({
+                {0, {ngraph::element::u8, ngraph::element::i8}},
+                {1, {ngraph::element::i8}}
             }),
         });
 

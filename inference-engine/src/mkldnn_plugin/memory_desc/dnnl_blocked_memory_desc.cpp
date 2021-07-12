@@ -9,9 +9,18 @@
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
 
-DnnlBlockedMemoryDesc::DnnlBlockedMemoryDesc(InferenceEngine::Precision prc, const Shape& shape) : MemoryDesc(shape, DnnlBlocked) {
+DnnlBlockedMemoryDesc::DnnlBlockedMemoryDesc(InferenceEngine::Precision prc, const Shape& shape, const VectorDims& strides)
+    : MemoryDesc(shape, DnnlBlocked) {
     const auto ndims = shape.getRank();
     const auto &dims = shape.getDims();
+
+    if (!strides.empty()) { // custom strides
+        desc = {MKLDNNExtensionUtils::convertToDnnlDims(dims),
+                MKLDNNExtensionUtils::IEPrecisionToDataType(prc),
+                MKLDNNExtensionUtils::convertToDnnlDims(strides)};
+        return;
+    }
+
     mkldnn::memory::dims plain_strides;
     if (std::any_of(dims.begin(), dims.end(), [](size_t val) { return val == Shape::UNDEFINED_DIM; })) {
         plain_strides.resize(ndims, DNNL_RUNTIME_DIM_VAL);
