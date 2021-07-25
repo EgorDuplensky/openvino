@@ -1223,6 +1223,10 @@ void MKLDNNNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, bool in
     IE_THROW() << "Fusing of " << this->getType() << " operation is not implemented";
 }
 
+void MKLDNNNode::appendBinPostOps(mkldnn::post_ops& ops, mkldnn::memory::desc desc) {
+    IE_THROW() << "Binary fusing of " << this->getType() << " operation is not implemented";
+}
+
 std::vector<InferenceEngine::Precision> MKLDNNNode::getInputPrecisions() const {
     std::vector<InferenceEngine::Precision> inputPrecisions;
     for (size_t i = 0; i < getParentEdges().size(); i++) {
@@ -1337,6 +1341,9 @@ MKLDNNNode* MKLDNNNode::NodesFactory::create(const std::shared_ptr<ngraph::Node>
 }
 
 bool MKLDNNNode::canBePerformedAsScaleShift(const MKLDNNNode *parentNode, size_t channelAxis) const {
+    if (parentNode && parentNode->getType() == MatMul && getAlgorithm() != EltwisePowerStatic)
+        return (one_of(getAlgorithm(), EltwiseAdd, EltwiseMultiply, EltwiseSubtract, EltwiseDivide, EltwisePrelu));
+
     size_t fusingPort = 0;
     for (size_t i = (parentNode == nullptr ? 1 : 0); i < getParentEdges().size(); i++) {
         MKLDNNNode *node = getParentEdgesAtPort(i)[0]->getParent().get();

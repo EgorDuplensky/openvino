@@ -78,6 +78,7 @@ public:
     bool canFuse(const MKLDNNNodePtr& node) const override;
     void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false,
                        const std::vector<size_t>& binaryShape = {}) override;
+    void appendBinPostOps(mkldnn::post_ops& ops, mkldnn::memory::desc desc) override;
     void fuseInto(MKLDNNNodePtr& parentNode, size_t channelAxis = 1) override;
     InferenceEngine::Precision getRuntimePrecision() const override;
 

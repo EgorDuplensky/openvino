@@ -9,8 +9,7 @@
 #include "reshape_1d_ops.hpp"
 #include "reshape_fc_fusion.hpp"
 #include "reshape_fully_connected.hpp"
-#include "broadcast_matmul.hpp"
-#include "reshape_matmul.hpp"
+#include "unsqueeze_matmul.hpp"
 #include "reshape_prelu.hpp"
 #include "convert_broadcast_to_tiles.hpp"
 #include "convert_tile_to_seq_tiles.hpp"
@@ -32,10 +31,9 @@ inline void ConvertToCPUSpecificOpset(std::shared_ptr<ngraph::Function> &nGraphF
     manager.register_pass<Reshape1DAvgPool>();
     manager.register_pass<Reshape1DMaxPool>();
     manager.register_pass<ConvertMatMulToFC>();
-    manager.register_pass<BroadcastMatMul>();
+    manager.register_pass<UnsqueezeMatMul>();
     manager.register_pass<ConvertBroadcastToTiles>();
     manager.register_pass<ConvertTileToSeqTiles>();
-    manager.register_pass<ReshapeMatMul>();
 //    manager.register_pass<FullyConnectedBiasFusion>();
     manager.register_pass<ReshapeFullyConnected>();
     manager.register_pass<ConvertToPowerStatic>();

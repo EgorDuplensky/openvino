@@ -19,6 +19,7 @@ public:
     void getSupportedDescriptors() override;
     void createDescriptor(const std::vector<MemoryDescPtr>& inputDesc,
                           const std::vector<MemoryDescPtr>& outputDesc) override;
+    void selectOptimalPrimitiveDescriptor() override;
     void initSupportedPrimitiveDescriptors() override;
     MemoryDescPtr getSrcMemDesc(mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx) override;
     void createPrimitive() override;
@@ -35,10 +36,14 @@ public:
     const std::vector<impl_desc_type>& getPrimitivesPriority() override;
 
 protected:
-    std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() const override;
+    std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr();
 
 private:
-    void setPostOps(mkldnn::primitive_attr &attr, bool initWeights) const;
+    InferenceEngine::Precision fusedEltwiseAddPrecision(const MKLDNNNode& fusingNode) const;
+    void setPostOps(mkldnn::primitive_attr &attr, bool initWeights, bool initAsBinary = false);
+    bool withFusedSum;
+    // depends on precision of fused nodes
+    mkldnn::memory::data_type outputDataType;
 
     std::string errorPrefix;
 
