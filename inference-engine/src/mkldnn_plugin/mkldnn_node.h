@@ -752,6 +752,8 @@ protected:
      * @param ops List of fused post operations
      */
     virtual void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false, const std::vector<size_t>& binaryShape = {});
+    virtual void appendBinPostOps(mkldnn::post_ops& ops, mkldnn::memory::desc desc);
+
     virtual std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() const { return nullptr; }
 
     typedef std::function<DnnlMemoryDescPtr (mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx)>

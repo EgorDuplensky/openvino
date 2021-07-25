@@ -18,6 +18,7 @@
 #include "nodes/mkldnn_interpolate_node.h"
 #include "nodes/mkldnn_input_node.h"
 #include "nodes/mkldnn_rnn.h"
+#include "nodes/mkldnn_matmul_node.h"
 #include "nodes/common/cpu_convert.h"
 
 #include "mkldnn/ie_mkldnn.h"
@@ -119,6 +120,10 @@ void MKLDNNGraphOptimizer::ApplyCommonGraphOptimizations(MKLDNNGraph &graph) {
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMatMulAndSimpleOperation");
     FuseMatMulAndSimpleOperation(graph);
+    graph.RemoveDroppedNodes();
+
+    OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMatmulAndAddAsBinary");
+    FuseMatmulAndAddAsBinary(graph);
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMVNAndSimpleOperation");
@@ -1190,6 +1195,123 @@ void MKLDNNGraphOptimizer::FuseConvolutionSumAndConvolutionSumActivation(MKLDNNG
             lastNode->remove();
         }
         sum->remove();
+    }
+}
+
+void MKLDNNGraphOptimizer::FuseMatmulAndAddAsBinary(MKLDNNGraph &graph) {
+    const std::vector<MKLDNNNodePtr> &graphNodes = graph.GetNodes();
+
+    for (const auto &node : graphNodes) {
+        if (!(node->getType()      == Eltwise &&
+              node->getAlgorithm() == EltwiseAdd))
+            continue;
+
+        // if (node->getType() == Eltwise &&
+        //     std::dynamic_pointer_cast<MKLDNNEltwiseNode>(node)->isWithBroadcast()) continue;
+
+        // TODO: Enlarge to several inputs
+        if (node->getParentEdges().size() != 2)
+            continue;
+
+        MKLDNNNodePtr parent1;
+        MKLDNNNodePtr parent2;
+
+        for (const auto& parentEdge : node->getParentEdges()) {
+            if (node->getParentEdges().size() > 2 && parentEdge.lock()->getParent()->isConstant())
+                continue;
+            if (!parent1)
+                parent1 = parentEdge.lock()->getParent();
+            else
+                parent2 = parentEdge.lock()->getParent();
+        }
+
+        if (parent1->isConstant() || parent2->isConstant())
+            continue;
+
+        auto isSuitableParent = [](const MKLDNNNodePtr& parent) {
+            if (const auto* matmul = dynamic_cast<MKLDNNMatMulNode *>(parent.get())) {
+                // if (!matmul->canBeExecutedInInt8()) {
+                // return matmul->getFusedWith().empty();
+                (void) matmul;
+                return true;
+                // }
+            }
+
+            return false;
+        };
+
+
+        bool isSuitableParent1 = isSuitableParent(parent1);
+        bool isSuitableParent2 = isSuitableParent(parent2);
+
+        if (!isSuitableParent1 && !isSuitableParent2)
+            continue;
+
+        if (parent1->getOutputShapeAtPort(0).getRank() != parent2->getOutputShapeAtPort(0).getRank())
+            continue;
+
+        auto  mergedNode = isSuitableParent1 ? parent1 : parent2;
+        auto  peerNode = isSuitableParent1 ? parent2 : parent1;
+
+        if (peerNode->isConstant())
+            continue;
+
+        const auto& binaryAdd = node;
+
+        if (mergedNode->getChildEdges().size() != 1)
+            continue;
+
+        // peer output should not be one of the merged inputs
+        const auto& mergedNodeParentEdges = mergedNode->getParentEdges();
+        if (mergedNodeParentEdges.end() != std::find_if(mergedNodeParentEdges.begin(), mergedNodeParentEdges.end(),
+                                                        [&](const MKLDNNEdgeWeakPtr& parentEdge){
+                                                            if (const auto edge = parentEdge.lock())
+                                                                return edge->getParent() == peerNode;
+                                                            return false;
+                                                        })) {
+            continue;
+        }
+
+        // All requirements met. Fuse
+        // last subgraph node is Sum or Relu
+        binaryAdd->fuseInto(mergedNode);
+
+        mergedNode->inputShapes.push_back(mergedNode->outputShapes[0]);
+
+        size_t childIdx = 0lu;
+        for (; childIdx < peerNode->getChildEdges().size(); childIdx++) {
+            if (peerNode->getChildEdgeAt(childIdx)->getChild() == binaryAdd) {
+                break;
+            }
+        }
+
+        const int peerPort = peerNode->getChildEdgeAt(childIdx)->getInputNum();
+        peerNode->getChildEdgeAt(childIdx)->drop();
+
+        // new edge for mergedNode
+        const int childPort = mergedNode->getParentEdges().size();
+        MKLDNNEdgePtr edgePtr(new MKLDNNEdge(peerNode, mergedNode, peerPort, childPort));
+        graph.GetEdges().push_back(edgePtr);
+        mergedNode->addEdge(edgePtr);
+
+        const std::vector<MKLDNNEdgeWeakPtr>& edgesToReconnect = binaryAdd->getChildEdges();
+        for (auto &edge_w : edgesToReconnect) {
+            auto edge = edge_w.lock();
+            auto child = edge->getChild();
+            int idxParent = edge->getInputNum();
+            int idxChild = edge->getOutputNum();
+
+            // reconnect after  activation/binaryAdd. Port index must be 0
+            IE_ASSERT(idxParent == 0);
+
+            edge->drop();
+
+            MKLDNNEdgePtr newEdge(new MKLDNNEdge(mergedNode, child, idxParent, idxChild));
+            graph.GetEdges().push_back(newEdge);
+            child->addEdge(newEdge);
+        }
+
+        binaryAdd->remove();
     }
 }
 

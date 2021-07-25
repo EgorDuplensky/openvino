@@ -18,6 +18,7 @@ public:
 
     std::vector<mkldnn::memory::format_tag> getAvailableFormatsForDims(const Shape &dims) const override;
     void getSupportedDescriptors() override;
+    void initSupportedPrimitiveDescriptors() override;
     void createPrimitive() override;
     void execute(mkldnn::stream strm) override;
     bool created() const override;
@@ -49,6 +50,7 @@ protected:
 private:
     void createDescriptorInternal(const mkldnn::memory::desc &inputDesc,
                                   const mkldnn::memory::desc &outputDesc);
+    mkldnn::memory::data_type outputDataType;
 
     InferenceEngine::SizeVector weightsDims;
     InferenceEngine::SizeVector biasesDims;

@@ -24,6 +24,7 @@ private:
     void FuseMultiplyAndAdd(MKLDNNGraph &graph);
     void FuseFullyConnectedAndSimpleOperation(MKLDNNGraph &graph);
     void FuseMatMulAndSimpleOperation(MKLDNNGraph &graph);
+    void FuseMatmulAndAddAsBinary(MKLDNNGraph &graph);
     void FuseConvolutionAndSimpleOperationThroughMaxPool(MKLDNNGraph &graph);
     void FuseConvolutionAndSimpleOperation(MKLDNNGraph &graph);
     void FuseConvolutionAndDWConvolution(MKLDNNGraph &graph);
