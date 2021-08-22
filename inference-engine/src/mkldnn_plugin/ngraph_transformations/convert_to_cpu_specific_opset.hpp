@@ -20,12 +20,14 @@
 #include "transformations/convert_precision.hpp"
 #include "transformations/utils/utils.hpp"
 #include "rnn_sequences_optimization.hpp"
+#include "move_eltwise_up_data_movement.hpp"
 
 namespace MKLDNNPlugin {
 
 inline void ConvertToCPUSpecificOpset(std::shared_ptr<ngraph::Function> &nGraphFunc) {
     ngraph::pass::Manager manager;
     manager.register_pass<ngraph::pass::ConstantFolding>();
+    manager.register_pass<MoveEltwiseUpThroughDataMov>();
     manager.register_pass<Reshape1DConvolution>();
     manager.register_pass<Reshape1DGroupConvolution>();
     manager.register_pass<Reshape1DAvgPool>();
