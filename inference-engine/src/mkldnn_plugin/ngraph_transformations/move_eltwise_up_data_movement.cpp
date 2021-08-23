@@ -34,12 +34,16 @@ namespace {
 } // namespace
 
 MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
-    auto eltwise_pattern = ngraph::pattern::wrap_type<ngraph::opset8::Add>();
+    auto eltwise_pattern = ngraph::pattern::wrap_type<ngraph::op::util::UnaryElementwiseArithmetic, ngraph::op::util::BinaryElementwiseArithmetic>();
 
     ngraph::matcher_pass_callback callback = [=](ngraph::pattern::Matcher& m) {
         const auto& pattern_map = m.get_pattern_value_map();
 
         auto eltwise = pattern_map.at(eltwise_pattern).get_node_shared_ptr();
+        bool is_binary_op = std::dynamic_pointer_cast<ngraph::op::util::BinaryElementwiseArithmetic>(eltwise) != nullptr;
+        if (is_binary_op && std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1)) == nullptr) {
+            return false;  // should we check constant on second branch?
+        }
 
         auto current = eltwise->get_input_node_shared_ptr(0);
         auto child = eltwise;
@@ -59,14 +63,28 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         if (child == eltwise) {
             return false;
         }
+        if (eltwise->get_friendly_name() == "Expand_1235") {
+            int a = 1;
+            ++a;
+        }
 
+        std::cout << eltwise->get_friendly_name() << std::endl;
         ngraph::replace_output_update_name(eltwise->output(0), eltwise->input_value(0));
 
-        auto newEltwise = eltwise->clone_with_new_inputs({current, eltwise->get_input_node_shared_ptr(1)});
+        ngraph::OutputVector eltwiseInputs{current};
+        if (is_binary_op) {
+            eltwiseInputs.emplace_back(eltwise->get_input_node_shared_ptr(1));
+        }
+        auto newEltwise = eltwise->clone_with_new_inputs(eltwiseInputs);
         ngraph::copy_runtime_info(eltwise, newEltwise);
         newEltwise->set_friendly_name(eltwise->get_friendly_name());
 
-        auto newChild = child->clone_with_new_inputs({newEltwise});
+        ngraph::OutputVector childInputs{newEltwise};
+        for (size_t index = 1; index < child->get_input_size(); ++index) {
+            childInputs.emplace_back(child->get_input_node_shared_ptr(index));
+        }
+        auto newChild = child->clone_with_new_inputs(childInputs);
+
         ngraph::copy_runtime_info(child, newChild);
         newChild->set_friendly_name(child->get_friendly_name());
 

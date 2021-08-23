@@ -50,7 +50,15 @@ inline void ConvertToCPUSpecificOpset(std::shared_ptr<ngraph::Function> &nGraphF
     }
     manager.register_pass<ngraph::pass::ConstantFolding>();
     manager.register_pass<ngraph::pass::ConvertPrecision>(precisions_array {{ ngraph::element::i64, ngraph::element::i32 }});
+    {
+        #include <ngraph/pass/visualize_tree.hpp>
+        ngraph::pass::VisualizeTree("/home/user/work/cascade_before.svg").run_on_function(nGraphFunc);
+    }
     manager.run_passes(nGraphFunc);
+    {
+        #include <ngraph/pass/visualize_tree.hpp>
+        ngraph::pass::VisualizeTree("/home/user/work/cascade_mov.svg").run_on_function(nGraphFunc);
+    }
 }
 
 }  // namespace MKLDNNPlugin
