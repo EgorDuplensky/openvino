@@ -32,6 +32,7 @@ public:
     }
 
     static bool isSupportedOperation(const std::shared_ptr<const ngraph::Node>& op, std::string& errorMessage) noexcept;
+    const std::vector<impl_desc_type>& getPrimitivesPriority() override;
 
 protected:
     std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() const override;
