@@ -31,6 +31,14 @@ namespace {
                std::dynamic_pointer_cast<ngraph::op::v7::Gather>(node) != nullptr ||
                std::dynamic_pointer_cast<ngraph::op::v8::Gather>(node) != nullptr;
     }
+
+    bool is_scalar_like(const std::shared_ptr<ngraph::Node>& node) {
+        auto constantNode = std::dynamic_pointer_cast<ngraph::opset8::Constant>(node);
+        if (constantNode == nullptr || !constantNode->get_all_data_elements_bitwise_identical()) {
+            return false;
+        }
+        return true;
+    }
 } // namespace
 
 MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
@@ -41,8 +49,10 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
 
         auto eltwise = pattern_map.at(eltwise_pattern).get_node_shared_ptr();
         bool is_binary_op = std::dynamic_pointer_cast<ngraph::op::util::BinaryElementwiseArithmetic>(eltwise) != nullptr;
-        if (is_binary_op && std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1)) == nullptr) {
-            return false;  // should we check constant on second branch?
+        if (is_binary_op &&
+            (std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1)) == nullptr ||
+            !is_scalar_like(eltwise->get_input_node_shared_ptr(1)))) {
+            return false;
         }
 
         auto current = eltwise->get_input_node_shared_ptr(0);
@@ -63,12 +73,13 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         if (child == eltwise) {
             return false;
         }
-        if (eltwise->get_friendly_name() == "Expand_1235") {
-            int a = 1;
-            ++a;
+
+        if (is_binary_op) {
+            auto constantNode = std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1));
+            auto scalarConstantNode = ngraph::opset8::Constant::create(constantNode->get_element_type(), {1}, constantNode->get_data_ptr());
+            ngraph::replace_node(constantNode, scalarConstantNode);
         }
 
-        std::cout << eltwise->get_friendly_name() << std::endl;
         ngraph::replace_output_update_name(eltwise->output(0), eltwise->input_value(0));
 
         ngraph::OutputVector eltwiseInputs{current};
