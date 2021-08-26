@@ -76,8 +76,9 @@ public:
     bool created() const override;
     bool canBeInPlace() const override;
     bool canFuse(const MKLDNNNodePtr& node) const override;
-    void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false) override;
-    void fuseInto(MKLDNNNodePtr& parentNode) override;
+    void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false,
+                       const std::vector<size_t>& binaryShape = {}) override;
+    void fuseInto(MKLDNNNodePtr& parentNode, size_t channelAxis = 1) override;
     InferenceEngine::Precision getRuntimePrecision() const override;
 
     float getAlpha() const { return alpha; }
@@ -122,7 +123,7 @@ private:
 
     std::vector<float> scales = {};
     std::vector<float> shifts = {};
-    size_t scalesSize = 0;
+//    size_t scalesSize = 0;
 
     std::vector<MKLDNNMemoryPtr> memPtrs = {};
 

@@ -371,7 +371,7 @@ public:
         fusedWith.push_back(fusingNode);
     }
 
-    virtual void fuseInto(MKLDNNNodePtr& parentNode) {
+    virtual void fuseInto(MKLDNNNodePtr& parentNode, size_t channelAxis = 1) {
         // The graph supports fusing only of consecutive nodes and some graph logic requires to know through which input port a node was fused into parent one.
         for (int i = 0; i < getParentEdges().size(); i++) {
             if (getParentEdgesAtPort(i)[0]->getParent().get() == parentNode.get()) {
@@ -700,7 +700,7 @@ public:
         isInQuantizedGraph = flag;
     }
 
-    bool canBePerformedAsScaleShift(const MKLDNNNode *parentNode = nullptr) const;
+    bool canBePerformedAsScaleShift(const MKLDNNNode *parentNode = nullptr, size_t channelAxis = 1) const;
 
     bool isDynamicNode() const {
         return isDynamic;
@@ -729,9 +729,10 @@ protected:
         IE_THROW(NotImplemented) << "[DS] executeDynamicImpl not implemented for node with type: " << getTypeStr();
     }
 
-    bool canFuseSimpleOperation(const MKLDNNNodePtr& node) const;
+    bool canFuseSimpleOperation(const MKLDNNNodePtr& node, size_t channelAxis = 1) const;
     // TODO [mandrono]: place outside of the node API
-    void fillScalesAndShifts(const MKLDNNNode *parentNode, std::vector<float> &scales, std::vector<float> &shifts, const int align = -1);
+    void fillScalesAndShifts(const MKLDNNNode *parentNode, std::vector<float> &scales, std::vector<float> &shifts, const int align = -1,
+                             size_t channelAxis = 1);
 
     void setType(Type type) {
         this->type = type;
@@ -750,7 +751,7 @@ protected:
      * Seed node should call this routine and pass its post operations list as parameter.
      * @param ops List of fused post operations
      */
-    virtual void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false);
+    virtual void appendPostOps(mkldnn::post_ops& ops, bool initAsBinary = false, bool initBinaryMemory = false, const std::vector<size_t>& binaryShape = {});
     virtual std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() const { return nullptr; }
 
     typedef std::function<DnnlMemoryDescPtr (mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx)>

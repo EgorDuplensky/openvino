@@ -179,7 +179,14 @@ void MKLDNNFullyConnectedNode::execute(mkldnn::stream strm) {
 }
 
 bool MKLDNNFullyConnectedNode::canFuse(const MKLDNNNodePtr& node) const {
-    return canFuseSimpleOperation(node);
+    for (size_t i = 1; i < node->getParentEdges().size(); i++) {
+        auto& shape = node->getInputShapeAtPort(i);
+        if (shape.getElementsCount() != 1) {
+            return false;
+        }
+    }
+
+    return canFuseSimpleOperation(node, inputShapes[0].getRank() == 3 ? 2 : 1);
 }
 
 void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights = false, bool initAsBinary = false) {
@@ -187,9 +194,14 @@ void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool ini
     mkldnn::post_ops ops;
 
     for (auto &node : fusedWith) {
+        size_t binaryShapeRank = outputShapes[0].getRank() == 3 ? 2 : outputShapes[0].getRank();
+        std::vector<size_t> binaryShape(binaryShapeRank, 1);
+        size_t channelAxis = outputShapes[0].getRank() == 3 ? 2 : 1;
+        binaryShape[1] = outputShapes[0].getStaticDims()[channelAxis];
+
         auto* fakeQuantizeNode = dynamic_cast<MKLDNNFakeQuantizeNode *>(node.get());
         if (fakeQuantizeNode) {
-            fakeQuantizeNode->appendPostOps(ops, initAsBinary, initBinaryMemory);
+            fakeQuantizeNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
             if (initBinaryMemory) {
                 if (fakeQuantizeNode->cropHighMemory)
                     binaryPostOpsArgs.push_back(fakeQuantizeNode->cropHighMemory->GetPrimitive());
@@ -209,7 +221,7 @@ void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool ini
 
         auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get());
         if (eltwiseNode) {
-            eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory);
+            eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
             if (initBinaryMemory) {
                 if (eltwiseNode->scalesMemory)
                     binaryPostOpsArgs.push_back(eltwiseNode->scalesMemory->GetPrimitive());

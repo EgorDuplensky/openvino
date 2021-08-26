@@ -1599,11 +1599,11 @@ void MKLDNNFakeQuantizeNode::execute(mkldnn::stream strm) {
     }
 }
 
-void MKLDNNFakeQuantizeNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, bool initBinaryMemory) {
+void MKLDNNFakeQuantizeNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, bool initBinaryMemory, const std::vector<size_t>& binaryShape) {
     // MKLDNN quantization_injectors assumes that quantization data memory is always aligned on 16
     // by length of AVX512 vector register which is also enough for AVX2 and SSE42 implementations.
     // Otherwise it can lead to buffer over-read and performance penalties due to denormals.
-    const size_t bufferAlignment = 16;
+    const size_t bufferAlignment = 1;
 
     if (getAlgorithm() == FQBinarization) {
         if (!isPostOpDataInitialized) {
@@ -1641,13 +1641,8 @@ void MKLDNNFakeQuantizeNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBin
 
         if (initAsBinary) {
             auto appendBinary = [&](const mkldnn::algorithm alg, const size_t dataSize, MKLDNNMemoryPtr &memPtr, const void *data) {
-                auto outShape = outputShapes[0].getStaticDims();
-                auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
-
-                std::vector<size_t> binaryShape(outShape.size(), 1);
-                binaryShape[chIdx] = dataSize;
-
-                DnnlBlockedMemoryDesc memoryDesc(Precision::FP32, Shape(binaryShape));
+                std::vector<size_t> broadcastBinaryShape(binaryShape.size(), 1);
+                DnnlBlockedMemoryDesc memoryDesc(Precision::FP32, dataSize == 1 ? Shape(broadcastBinaryShape) : Shape(binaryShape));
                 ops.append_binary(alg, memoryDesc.getDnnlDesc());
 
                 if (initBinaryMemory) {

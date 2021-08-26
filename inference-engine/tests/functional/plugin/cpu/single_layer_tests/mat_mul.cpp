@@ -67,7 +67,7 @@ protected:
          * Currently nodes are not fused thought Reshape
          * Check can be deleted after this limitation is gone
          */
-        if (nodeType == MatMulNodeType::MatMul && inShapeA.size() < 4 && inShapeB.size() < 4)
+//        if (nodeType == MatMulNodeType::MatMul && inShapeA.size() < 4 && inShapeB.size() < 4)
             std::tie(postOpMgrPtr, fusedOps) = fusingParams;
 
         configuration.insert(additionalConfig.begin(), additionalConfig.end());
@@ -158,9 +158,10 @@ const std::vector<ShapeRelatedParams> IS2D {
 std::vector<fusingSpecificParams> fusingParamsSet2D {
         emptyFusingSpec,
         fusingBiasFC,
-        fusingRelu,
-        fusingMultiplyPerChannel,
-        fusingPReluPerTensor
+//        fusingRelu,
+//        fusingMultiplyPerTensor,
+//        fusingPReluPerTensor,
+//        fusingFakeQuantizePerTensorRelu
 };
 
 const auto fullyConnectedParams2D = ::testing::Combine(::testing::ValuesIn(IS2D),
@@ -192,7 +193,9 @@ const std::vector<ShapeRelatedParams> IS3D = {
 
 std::vector<fusingSpecificParams> fusingParamsSet3D {
         emptyFusingSpec,
-        fusingBiasFC
+        fusingBiasFC,
+//        fusingMultiplyPerTensor,
+//        fusingFakeQuantizePerTensorRelu
 };
 
 const auto fullyConnectedParams3D = ::testing::Combine(::testing::ValuesIn(IS3D),
@@ -240,7 +243,7 @@ const std::vector<ShapeRelatedParams> IS = {
 
 std::vector<fusingSpecificParams> matmulFusingParams {
         emptyFusingSpec,
-        fusingElu,
+//        fusingElu,
 };
 
 const auto matMulParams = ::testing::Combine(::testing::ValuesIn(IS),

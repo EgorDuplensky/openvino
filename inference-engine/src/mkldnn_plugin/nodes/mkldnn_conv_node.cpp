@@ -378,7 +378,7 @@ void MKLDNNConvolutionNode::setPostOps(mkldnn::primitive_attr &attr, bool initWe
                     std::vector<float> fqScale = fakeQuantizeNode->getFQScales();
                     if (!fqScale.empty()) {
                         size_t size = fqScale.size();
-                        size_t OC = getChildEdgeAt(0)->getShape().getStaticDims()[1];
+                        size_t OC = getOutputShapeAtPort(0).getStaticDims()[1];
                         if (size == 1) {
                             fqScale.resize(OC);
                             for (size_t k = 0; k < OC; k++)

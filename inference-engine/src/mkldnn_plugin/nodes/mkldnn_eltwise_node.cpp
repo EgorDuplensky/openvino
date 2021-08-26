@@ -1658,23 +1658,23 @@ bool MKLDNNEltwiseNode::canBeInPlace() const {
     return getInputShapeAtPort(0) == getOutputShapeAtPort(0);
 }
 
-void MKLDNNEltwiseNode::fuseInto(MKLDNNNodePtr& parentNode) {
+void MKLDNNEltwiseNode::fuseInto(MKLDNNNodePtr& parentNode, size_t channelAxis) {
     // Handling Convolution custom Add node fusing case which is processed via dnnl append_sum() API.
     specialConvolutionAddFusing = (parentNode->getType() == Convolution || parentNode->getType() == BinaryConvolution) && getAlgorithm() == EltwiseAdd &&
             getInputShapeAtPort(0) == getInputShapeAtPort(1);
-    if (!specialConvolutionAddFusing && canBePerformedAsScaleShift(parentNode.get())) {
+    if (!specialConvolutionAddFusing && canBePerformedAsScaleShift(parentNode.get(), channelAxis)) {
         if ((parentNode->getType() == FullyConnected) && one_of(getAlgorithm(), EltwiseAdd, EltwiseSubtract,
                 EltwiseMultiply, EltwiseDivide, EltwiseMulAdd, EltwisePowerStatic, EltwisePrelu)) {
-            fillScalesAndShifts(parentNode.get(), scales, shifts);
+            fillScalesAndShifts(parentNode.get(), scales, shifts, -1, channelAxis);
         } else {
-            fillScalesAndShifts(parentNode.get(), scales, shifts, 16);
+            fillScalesAndShifts(parentNode.get(), scales, shifts, 16, channelAxis);
         }
-        scalesSize = static_cast<size_t>(outputShapes[0].getStaticDims()[outputShapes[0].getRank() > 1 ? 1 : 0]);
+//        scalesSize = static_cast<size_t>(outputShapes[0].getStaticDims()[outputShapes[0].getRank() > 1 ? 1 : 0]);
     }
     MKLDNNNode::fuseInto(parentNode);
 }
 
-void MKLDNNEltwiseNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, bool initBinaryMemory) {
+void MKLDNNEltwiseNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, bool initBinaryMemory, const std::vector<size_t>& binaryShape) {
     const std::string errorPrefix = "Appending Eltwise node with name '" + getName() + "' ";
     if (getMKLDNNAlgorithm() != mkldnn::algorithm::undef) {
         switch (getMKLDNNAlgorithm()) {
@@ -1708,13 +1708,8 @@ void MKLDNNEltwiseNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, 
                 if (data.empty())
                     IE_THROW() << errorPrefix << "cannot be performed since buffers are not allocated";
 
-                auto outShape = outputShapes[0].getStaticDims();
-                auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
-
-                std::vector<size_t> binaryShape(outShape.size(), 1);
-                binaryShape[chIdx] = outShape[chIdx];
-
-                DnnlBlockedMemoryDesc memoryDesc(Precision::FP32, Shape(binaryShape));
+                std::vector<size_t> broadcastBinaryShape(binaryShape.size(), 1);
+                DnnlBlockedMemoryDesc memoryDesc(Precision::FP32, data.size() == 1 ? Shape(broadcastBinaryShape) : Shape(binaryShape));
                 ops.append_binary(alg, memoryDesc.getDnnlDesc());
 
                 if (initBinaryMemory) {
