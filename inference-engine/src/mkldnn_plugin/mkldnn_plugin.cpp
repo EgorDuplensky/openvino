@@ -343,7 +343,7 @@ static void Transformation(CNNNetwork& clonedNetwork, const Config& conf) {
 
         auto supportedPrecisions = std::vector<OperationPrecisionRestriction>({
             OperationPrecisionRestriction::create<ngraph::opset1::Convolution>({
-                {0, {ngraph::element::u8}},
+                {0, {ngraph::element::u8, ngraph::element::i8}},
                 {1, {ngraph::element::i8}},
             }),
             OperationPrecisionRestriction::create<ngraph::opset1::ConvolutionBackpropData>({
