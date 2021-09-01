@@ -37,7 +37,7 @@ inline void ConvertToCPUSpecificOpset(std::shared_ptr<ngraph::Function> &nGraphF
     manager.register_pass<ConvertTileToSeqTiles>();
     manager.register_pass<ReshapeMatMul>();
 //    manager.register_pass<FullyConnectedBiasFusion>();
-//    manager.register_pass<ReshapeFullyConnected>();
+    manager.register_pass<ReshapeFullyConnected>();
     manager.register_pass<ConvertToPowerStatic>();
     manager.register_pass<ConvertToLeakyRelu>();
     manager.register_pass<ReshapePRelu>();
