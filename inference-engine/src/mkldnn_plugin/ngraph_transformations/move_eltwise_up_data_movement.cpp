@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <numeric>
 
 #include <ngraph/opsets/opset8.hpp>
 #include <ngraph/rt_info.hpp>
@@ -34,7 +35,8 @@ namespace {
 
     bool is_scalar_like(const std::shared_ptr<ngraph::Node>& node) {
         auto constantNode = std::dynamic_pointer_cast<ngraph::opset8::Constant>(node);
-        if (constantNode == nullptr || !constantNode->get_all_data_elements_bitwise_identical()) {
+        auto shape = constantNode->get_shape();
+        if (constantNode == nullptr || shape_size(shape) > 1) {
             return false;
         }
         return true;
@@ -82,10 +84,12 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
 
         ngraph::replace_output_update_name(eltwise->output(0), eltwise->input_value(0));
 
-        ngraph::OutputVector eltwiseInputs{current};
+        ngraph::OutputVector eltwiseInputs{child->input_value(0)};
+
         if (is_binary_op) {
-            eltwiseInputs.emplace_back(eltwise->get_input_node_shared_ptr(1));
+            eltwiseInputs.emplace_back(eltwise->input_value(1));
         }
+
         auto newEltwise = eltwise->clone_with_new_inputs(eltwiseInputs);
         ngraph::copy_runtime_info(eltwise, newEltwise);
         newEltwise->set_friendly_name(eltwise->get_friendly_name());
@@ -94,6 +98,7 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         for (size_t index = 1; index < child->get_input_size(); ++index) {
             childInputs.emplace_back(child->get_input_node_shared_ptr(index));
         }
+
         auto newChild = child->clone_with_new_inputs(childInputs);
 
         ngraph::copy_runtime_info(child, newChild);
