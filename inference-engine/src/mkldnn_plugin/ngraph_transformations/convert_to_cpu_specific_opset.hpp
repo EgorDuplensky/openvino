@@ -27,6 +27,8 @@ namespace MKLDNNPlugin {
 inline void ConvertToCPUSpecificOpset(std::shared_ptr<ngraph::Function> &nGraphFunc) {
     ngraph::pass::Manager manager;
     manager.register_pass<ngraph::pass::ConstantFolding>();
+    manager.register_pass<MoveEltwiseUpThroughDataMov>();
+
     manager.get_pass_config()->set_callback<MoveEltwiseUpThroughDataMov>([](const std::shared_ptr<const ngraph::Node>& node) -> bool {
         if (node->get_input_size() >= 2) {
             return node->get_input_element_type(1) != ngraph::element::i8 && node->get_input_element_type(1) != ngraph::element::u8;
