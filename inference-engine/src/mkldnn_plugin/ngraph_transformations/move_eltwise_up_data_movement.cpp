@@ -57,17 +57,31 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
             return false;
         }
 
+        if (eltwise->get_output_size() > 0 && eltwise->get_input_size() > 0 &&
+            eltwise->get_output_element_type(0) != eltwise->get_input_element_type(0)) {
+            return false;
+        }
+
         auto current = eltwise->get_input_node_shared_ptr(0);
         auto child = eltwise;
 
         while (true) {
+            if (!is_data_movement_operation(current)) {
+                break;
+            }
+
             if (current->get_output_size() != 1) {
                 break;
             }
 
-            if (!is_data_movement_operation(current)) {
+            if (current->get_output_target_inputs(0).size() != 1) {
                 break;
             }
+
+            if (current->get_output_element_type(0) != current->get_input_element_type(0)) {
+                break;
+            }
+
             child = current;
             current = current->get_input_node_shared_ptr(0);
         }
@@ -105,7 +119,6 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         newChild->set_friendly_name(child->get_friendly_name());
 
         ngraph::replace_node(child, newChild);
-
         return true;
     };
 
