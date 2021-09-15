@@ -342,7 +342,7 @@ std::shared_ptr<MemoryDesc> MKLDNNFullyConnectedNode::getSrcMemDesc(mkldnn::prim
     auto desc = idx > 0 ? primitive_desc_it.weights_desc(idx - 1) : primitive_desc_it.src_desc(idx);
 
     if (getInputShapeAtPort(idx).getRank() == 3) {
-        return std::make_shared<CpuBlockedMemoryDesc>(MKLDNNExtensionUtils::DataTypeToIEPrecision(
+        return std::make_shared<DnnlBlockedMemoryDesc>(MKLDNNExtensionUtils::DataTypeToIEPrecision(
             static_cast<mkldnn::memory::data_type>(desc.data.data_type)), getInputShapeAtPort(idx));
     }
     return MKLDNNExtensionUtils::makeDescriptor(desc);
@@ -352,7 +352,7 @@ std::shared_ptr<MemoryDesc> MKLDNNFullyConnectedNode::getDstMemDesc(mkldnn::prim
     auto desc = primitive_desc_it.dst_desc(idx);
 
     if (getOutputShapeAtPort(idx).getRank() == 3) {
-        return std::make_shared<CpuBlockedMemoryDesc>(MKLDNNExtensionUtils::DataTypeToIEPrecision(
+        return std::make_shared<DnnlBlockedMemoryDesc>(MKLDNNExtensionUtils::DataTypeToIEPrecision(
             static_cast<mkldnn::memory::data_type>(desc.data.data_type)), getOutputShapeAtPort(idx));
     }
     return MKLDNNExtensionUtils::makeDescriptor(desc);

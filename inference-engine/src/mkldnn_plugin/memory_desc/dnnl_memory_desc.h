@@ -46,11 +46,12 @@ public:
 
     bool hasEmptyExtraData() const { return desc.data.extra.flags == dnnl_memory_extra_flag_none; }
 
+    mkldnn::memory::desc desc;
+
 protected:
     DnnlMemoryDesc() {}
     static constexpr size_t UNREACHABLE_DIM = std::numeric_limits<size_t>::max();
 
-    mkldnn::memory::desc desc;
 
     void setPrecision(InferenceEngine::Precision prc) override {
         desc.data.data_type = static_cast<dnnl_data_type_t>(MKLDNNExtensionUtils::IEPrecisionToDataType(prc));

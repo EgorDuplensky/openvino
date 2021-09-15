@@ -86,9 +86,12 @@ MemoryDescPtr MemoryDescUtils::cloneWithUndefStridesAndOffset(const MemoryDesc& 
         return std::make_shared<CpuBlockedMemoryDesc>(blkMemDesc->getPrecision(), blkMemDesc->getShape(), blkMemDesc->getBlockDims(),
                                                                     blkMemDesc->getOrder(), offsetPadding, offsetPaddingToData, strides);
     } else if (blkMemDesc->getType() == MemoryDescType::DnnlBlocked) {
-        return DnnlBlockedMemoryDescPtr(new DnnlBlockedMemoryDesc(blkMemDesc->getPrecision(), blkMemDesc->getShape(),
+        auto newDesc = DnnlBlockedMemoryDescPtr(new DnnlBlockedMemoryDesc(blkMemDesc->getPrecision(), blkMemDesc->getShape(),
                                                                   blkMemDesc->getBlockDims(), blkMemDesc->getOrder(),
                                                                   offsetPadding, offsetPaddingToData, strides));
+        auto dnnlBlkMemDesc = desc.as<DnnlBlockedMemoryDesc>();
+        newDesc->desc.data.extra = dnnlBlkMemDesc->desc.data.extra;
+        return newDesc;
     } else {
         IE_THROW() << "Cannot apply undefined offset. Unsupported memory desc type";
     }
@@ -101,8 +104,12 @@ MemoryDescPtr MemoryDescUtils::cloneWithDefaultStridesAndOffset(const MemoryDesc
         return std::make_shared<CpuBlockedMemoryDesc>(blkMemDesc->getPrecision(), blkMemDesc->getShape(),
                                                                blkMemDesc->getBlockDims(), blkMemDesc->getOrder());
     } else if (MemoryDescType::DnnlBlocked == desc.getType()) {
-        return DnnlBlockedMemoryDescPtr(new DnnlBlockedMemoryDesc(blkMemDesc->getPrecision(), blkMemDesc->getShape(),
+        auto newDesc = DnnlBlockedMemoryDescPtr(new DnnlBlockedMemoryDesc(blkMemDesc->getPrecision(), blkMemDesc->getShape(),
                                                                   blkMemDesc->getBlockDims(), blkMemDesc->getOrder()));
+
+        auto dnnlBlkMemDesc = desc.as<DnnlBlockedMemoryDesc>();
+        newDesc->desc.data.extra = dnnlBlkMemDesc->desc.data.extra;
+        return newDesc;
     } else {
         IE_THROW() << "cloneWithDefaultStridesAndOffset supports Blocked descriptors only";
     }
