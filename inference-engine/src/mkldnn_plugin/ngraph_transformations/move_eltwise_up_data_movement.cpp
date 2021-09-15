@@ -59,11 +59,11 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         auto current = eltwise->get_input_node_shared_ptr(0);
         auto child = eltwise;
 
-        while (true) {
-            if (!is_data_movement_operation(current) || current->get_output_size() != 1 ||
+        while (is_data_movement_operation(current)) {
+            if (current->get_output_size() != 1 ||
                 current->get_output_target_inputs(0).size() != 1 ||
                 current->get_output_element_type(0) != current->get_input_element_type(0)) {
-                break;
+                return false;
             }
 
             child = current;
@@ -75,19 +75,16 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         }
 
         ngraph::replace_output_update_name(eltwise->output(0), eltwise->input_value(0));
+
         ngraph::OutputVector eltwiseInputs = eltwise->input_values();
         eltwiseInputs[0] = child->input_value(0);
-
         auto newEltwise = eltwise->clone_with_new_inputs(eltwiseInputs);
         ngraph::copy_runtime_info(eltwise, newEltwise);
         newEltwise->set_friendly_name(eltwise->get_friendly_name());
 
         ngraph::OutputVector childInputs = child->input_values();
-
         childInputs[0] = newEltwise;
-
         auto newChild = child->clone_with_new_inputs(childInputs);
-
         ngraph::copy_runtime_info(child, newChild);
         newChild->set_friendly_name(child->get_friendly_name());
 
