@@ -8,9 +8,15 @@ add_library(cpuSpecificRtInfo STATIC ${IE_MAIN_SOURCE_DIR}/src/mkldnn_plugin/uti
                                      ${IE_MAIN_SOURCE_DIR}/src/mkldnn_plugin/utils/rt_info/memory_formats_attribute.cpp)
 target_link_libraries(cpuSpecificRtInfo PRIVATE ngraph)
 
+# TODO: generalize for all transformations
+add_library(cpuNgraphTransformations STATIC ${IE_MAIN_SOURCE_DIR}/src/mkldnn_plugin/ngraph_transformations/move_eltwise_up_data_movement.hpp
+                                            ${IE_MAIN_SOURCE_DIR}/src/mkldnn_plugin/ngraph_transformations/move_eltwise_up_data_movement.cpp)
+
+target_link_libraries(cpuNgraphTransformations PRIVATE ngraph)
+
 set(INCLUDES ${CMAKE_CURRENT_SOURCE_DIR} ${IE_MAIN_SOURCE_DIR}/src/mkldnn_plugin)
 set(DEPENDENCIES MKLDNNPlugin)
-set(LINK_LIBRARIES funcSharedTests cpuSpecificRtInfo)
+set(LINK_LIBRARIES funcSharedTests cpuSpecificRtInfo cpuNgraphTransformations)
 if (NGRAPH_ONNX_FRONTEND_ENABLE)
     list(APPEND INCLUDES "${OpenVINO_SOURCE_DIR}/docs/onnx_custom_op")
     list(APPEND LINK_LIBRARIES onnx_custom_op)

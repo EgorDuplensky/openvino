@@ -35,11 +35,7 @@ namespace {
 
     bool is_scalar_like(const std::shared_ptr<ngraph::Node>& node) {
         auto constantNode = std::dynamic_pointer_cast<ngraph::opset8::Constant>(node);
-        auto shape = constantNode->get_shape();
-        if (constantNode == nullptr || shape_size(shape) > 1) {
-            return false;
-        }
-        return true;
+        return constantNode != nullptr && shape_size(constantNode->get_shape()) == 1;
     }
 } // namespace
 
@@ -51,9 +47,7 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
 
         auto eltwise = pattern_map.at(eltwise_pattern).get_node_shared_ptr();
         bool is_binary_op = std::dynamic_pointer_cast<ngraph::op::util::BinaryElementwiseArithmetic>(eltwise) != nullptr;
-        if (is_binary_op &&
-            (std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1)) == nullptr ||
-            !is_scalar_like(eltwise->get_input_node_shared_ptr(1)))) {
+        if (is_binary_op && !is_scalar_like(eltwise->get_input_node_shared_ptr(1))) {
             return false;
         }
 
@@ -66,19 +60,9 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
         auto child = eltwise;
 
         while (true) {
-            if (!is_data_movement_operation(current)) {
-                break;
-            }
-
-            if (current->get_output_size() != 1) {
-                break;
-            }
-
-            if (current->get_output_target_inputs(0).size() != 1) {
-                break;
-            }
-
-            if (current->get_output_element_type(0) != current->get_input_element_type(0)) {
+            if (!is_data_movement_operation(current) || current->get_output_size() != 1 ||
+                current->get_output_target_inputs(0).size() != 1 ||
+                current->get_output_element_type(0) != current->get_input_element_type(0)) {
                 break;
             }
 
@@ -90,28 +74,17 @@ MKLDNNPlugin::MoveEltwiseUpThroughDataMov::MoveEltwiseUpThroughDataMov() {
             return false;
         }
 
-        if (is_binary_op) {
-            auto constantNode = std::dynamic_pointer_cast<ngraph::opset8::Constant>(eltwise->get_input_node_shared_ptr(1));
-            auto scalarConstantNode = ngraph::opset8::Constant::create(constantNode->get_element_type(), {1}, constantNode->get_data_ptr());
-            ngraph::replace_node(constantNode, scalarConstantNode);
-        }
-
         ngraph::replace_output_update_name(eltwise->output(0), eltwise->input_value(0));
-
-        ngraph::OutputVector eltwiseInputs{child->input_value(0)};
-
-        if (is_binary_op) {
-            eltwiseInputs.emplace_back(eltwise->input_value(1));
-        }
+        ngraph::OutputVector eltwiseInputs = eltwise->input_values();
+        eltwiseInputs[0] = child->input_value(0);
 
         auto newEltwise = eltwise->clone_with_new_inputs(eltwiseInputs);
         ngraph::copy_runtime_info(eltwise, newEltwise);
         newEltwise->set_friendly_name(eltwise->get_friendly_name());
 
-        ngraph::OutputVector childInputs{newEltwise};
-        for (size_t index = 1; index < child->get_input_size(); ++index) {
-            childInputs.emplace_back(child->get_input_node_shared_ptr(index));
-        }
+        ngraph::OutputVector childInputs = child->input_values();
+
+        childInputs[0] = newEltwise;
 
         auto newChild = child->clone_with_new_inputs(childInputs);
 
