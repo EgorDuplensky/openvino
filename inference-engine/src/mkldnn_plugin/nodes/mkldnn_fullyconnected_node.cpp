@@ -179,12 +179,12 @@ void MKLDNNFullyConnectedNode::execute(mkldnn::stream strm) {
 }
 
 bool MKLDNNFullyConnectedNode::canFuse(const MKLDNNNodePtr& node) const {
-    for (size_t i = 1; i < node->getParentEdges().size(); i++) {
-        auto& shape = node->getInputShapeAtPort(i);
-        if (shape.getElementsCount() != 1) {
-            return false;
-        }
-    }
+//    for (size_t i = 1; i < node->getParentEdges().size(); i++) {
+//        auto& shape = node->getInputShapeAtPort(i);
+//        if (shape.getElementsCount() != 1) {
+//            return false;
+//        }
+//    }
 
     return canFuseSimpleOperation(node, inputShapes[0].getRank() == 3 ? 2 : 1);
 }
