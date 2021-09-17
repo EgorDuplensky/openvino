@@ -8,6 +8,7 @@
 
 #include <mkldnn_types.h>
 #include "cpu_types.h"
+#include "ngraph_transformations/op/fully_connected.hpp"
 #include "utils/bfloat16.hpp"
 #include <cpu/x64/injectors/jit_uni_quantization_injector.hpp>
 #include <cpu/ref_eltwise.hpp>
@@ -1677,9 +1678,9 @@ void MKLDNNEltwiseNode::fuseInto(MKLDNNNodePtr& parentNode, size_t channelAxis) 
     };
 
     // Handling Convolution custom Add node fusing case which is processed via dnnl append_sum() API.
-    specialConvolutionAddFusing = (parentNode->getType() == Convolution || parentNode->getType() == BinaryConvolution) && getAlgorithm() == EltwiseAdd &&
+    sumFusing = one_of(parentNode->getType(), Convolution, BinaryConvolution, FullyConnected) && getAlgorithm() == EltwiseAdd &&
             getInputShapeAtPort(0) == getInputShapeAtPort(1);
-    if (!specialConvolutionAddFusing && canBePerformedAsScaleShift(parentNode.get(), channelAxis)) {
+    if (!sumFusing && canBePerformedAsScaleShift(parentNode.get(), channelAxis)) {
         if ((parentNode->getType() == FullyConnected) && one_of(getAlgorithm(), EltwiseAdd, EltwiseSubtract,
                 EltwiseMultiply, EltwiseDivide, EltwiseMulAdd, EltwisePowerStatic, EltwisePrelu)) {
             fillScalesAndShifts(parentNode.get(), scales, shifts, -1, channelAxis);

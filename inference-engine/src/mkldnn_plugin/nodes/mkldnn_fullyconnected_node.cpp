@@ -15,6 +15,7 @@
 #include "utils/general_utils.h"
 #include <memory_desc/cpu_memory_desc_utils.h>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
+#include "cpu/x64/cpu_isa_traits.hpp"
 
 using namespace mkldnn;
 using namespace MKLDNNPlugin;
@@ -74,22 +75,93 @@ std::vector<memory::format_tag> MKLDNNFullyConnectedNode::getAvailableFormatsFor
     return {memory::format_tag::any};
 }
 
+bool MKLDNNFullyConnectedNode::canBeExecutedInInt8() const {
+    auto inputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalInputPrecisionAtPort(0));
+    inputDataType = memory::data_type::u8;
+
+    auto weightsDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalInputPrecisionAtPort(1));
+    weightsDataType = memory::data_type::s8;
+
+    return one_of(inputDataType, memory::data_type::u8, memory::data_type::s8) && weightsDataType == memory::data_type::s8;
+}
+
+/* Fuse sum only if not fallback to the reference implementation */
+bool MKLDNNFullyConnectedNode::shouldFuseSum() const {
+    if (fusedWith.size() == 0)
+        return true; // sum as a first postop is supported by all the implementations
+
+    if (canBeExecutedInInt8())
+        return mkldnn::impl::cpu::x64::mayiuse(mkldnn::impl::cpu::x64::avx512_core_vnni);
+    else
+        return mkldnn::impl::cpu::x64::mayiuse(mkldnn::impl::cpu::x64::avx512_core);
+}
+
+Precision MKLDNNFullyConnectedNode::fusedEltwisePrecision(const MKLDNNNode& fusingNode) const {
+    InferenceEngine::Precision eltwiseNonFusedInPortPrecision;
+
+    int fusingPort = fusingNode.getFusingPort();
+    if (fusingPort == 0) {
+        eltwiseNonFusedInPortPrecision = fusingNode.getOriginalInputPrecisionAtPort(1);
+    } else if (fusingPort == 1) {
+        eltwiseNonFusedInPortPrecision = fusingNode.getOriginalInputPrecisionAtPort(0);
+    } else {
+        IE_THROW() << "Cannot determine Eltwise post op precision for Convolution node with name '" << getName() << "'";
+    }
+
+    return eltwiseNonFusedInPortPrecision;
+}
+
 void MKLDNNFullyConnectedNode::getSupportedDescriptors() {
-    if (getParentEdges().size() != 2 && getParentEdges().size() != 3)
-        IE_THROW() << errorPrefix << " has incorrect number of input edges";
     if (getChildEdges().empty())
         IE_THROW()<< errorPrefix << " has incorrect number of output edges";
 
+    int expectedInputEdgesNum = withBiases ? 3 : 2;
+    for (const auto& fusee : fusedWith) {
+        if (auto *eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusee.get())) {
+            if (eltwiseNode->isSumFusing()) {
+                if (!eltwiseNode->isWithBroadcast()) {
+                    withFusedSum = true;
+                    expectedInputEdgesNum++;
+                }
+            }
+        }
+    }
+
+    if (getParentEdges().size() != expectedInputEdgesNum)
+        IE_THROW() << errorPrefix << "has incorrect number of input edges. Expected: "
+                   << expectedInputEdgesNum << ", get " << getParentEdges().size();
+
     auto inputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalInputPrecisionAtPort(DATA_ID));
-    auto outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalOutputPrecisionAtPort(DATA_ID));
+    outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalOutputPrecisionAtPort(DATA_ID));
+    eltwisePrecision = MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType);
+    if (!fusedWith.empty()) {
+        outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(fusedWith[fusedWith.size() - 1]->getOriginalOutputPrecisionAtPort(0));
+        eltwisePrecision = MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType);
+    }
 
     if (inputDataType == memory::data_type::f32) {
         outputDataType = memory::data_type::f32;
     }
 
-    if (!fusedWith.empty()) {
-        outputDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(fusedWith[fusedWith.size() - 1]->getOriginalOutputPrecisionAtPort(0));
+    // We need to make sure that convolution output and second input of fused Eltwise operation
+    // have equal precision sizes since they use the same physical memory. In case precisions are different we upscale to FP32.
+    if (outputDataType != memory::data_type::f32 && outputDataType != memory::data_type::bf16 && withFusedSum) {
+        for (const auto& fusee : fusedWith) {
+            if (fusee->getAlgorithm() == EltwiseAdd) {
+                if (const auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusee.get())) {
+                    if (eltwiseNode->isSumFusing()) {
+                        eltwisePrecision = fusedEltwisePrecision(*eltwiseNode);
+                        if (MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType).size() != eltwisePrecision.size()) {
+                            eltwisePrecision = Precision::FP32;
+                            outputDataType = memory::data_type::f32;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
+
     auto weightsDataType = MKLDNNExtensionUtils::IEPrecisionToDataType(getOriginalInputPrecisionAtPort(WEIGHTS_ID));
 
     //  We have to extend gemm_x8s8s32x_inner_product_fwd_t from oneDNN to support BF16 output data type
@@ -128,52 +200,123 @@ void MKLDNNFullyConnectedNode::getSupportedDescriptors() {
     }
 }
 
-//void MKLDNNFullyConnectedNode::initSupportedPrimitiveDescriptors() {
-//    if (!supportedPrimitiveDescriptors.empty())
-//        return;
-//
-//    auto attr = initPrimitiveAttr();
-//
-//    for (auto& desc : descs) {
-//        auto itpd = desc.createPrimitiveDescriptorIterator(getEngine(), *attr);
-//        while (static_cast<bool>(itpd)) {
-//            NodeConfig config;
-//            config.dynBatchSupport = true;
-//
-//            for (size_t i = 0; i < getOriginalInputsNumber(); i++) {
-//                PortConfig portConfig;
-//                portConfig.inPlace = -1;
-//                portConfig.constant = false;
-//                portConfig.desc = getSrcMemDesc(itpd, i);
-//                config.inConfs.push_back(portConfig);
-//            }
-//
-//            for (size_t i = 0; i < descOutputNumbers(desc); i++) {
-//                PortConfig portConfig;
-//
-//                portConfig.constant = false;
-//                portConfig.desc = getDstMemDesc(itpd, i);
-//                config.outConfs.push_back(portConfig);
-//
-//                for (const auto& fusee : fusedWith) {
-//                    if (const auto *eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusee.get())) {
-//                        if (eltwiseNode->getAlgorithm() == EltwiseAdd && eltwiseNode->getMKLDNNAlgorithm() == dnnl::algorithm::undef) {
-//                            portConfig.desc = MemoryDescUtils::cloneWithNewPrecision(*portConfig.desc,
-//                                                                                     MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType));
-//                            config.inConfs.push_back(portConfig);
-//                        }
-//                    }
-//                }
-//            }
-//
-//            impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
-//
-//            supportedPrimitiveDescriptors.emplace_back(config, impl_type);
-//            if (!itpd.next_impl())
-//                break;
-//        }
-//    }
-//}
+void MKLDNNFullyConnectedNode::selectOptimalPrimitiveDescriptor() {
+    selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true);
+}
+
+void MKLDNNFullyConnectedNode::initSupportedPrimitiveDescriptors() {
+    if (!supportedPrimitiveDescriptors.empty())
+        return;
+
+    auto attr = initPrimitiveAttr();
+
+    for (auto& desc : descs) {
+        auto itpd = desc.createPrimitiveDescriptorIterator(getEngine(), *attr);
+        while (static_cast<bool>(itpd)) {
+            NodeConfig config;
+            config.dynBatchSupport = true;
+            for (size_t i = 0; i < descInputNumbers(desc); i++) {
+                PortConfig portConfig;
+                portConfig.inPlace = -1;
+                portConfig.constant = false;
+                portConfig.desc = getSrcMemDesc(itpd, i);
+                config.inConfs.push_back(portConfig);
+            }
+
+            for (size_t i = 0; i < descOutputNumbers(desc); i++) {
+                PortConfig portConfig;
+                portConfig.inPlace = canBeInPlace() ? 0 : -1;
+
+                if (withFusedSum) {
+                    portConfig.inPlace = getParentEdges().size() - 1;
+                }
+
+                portConfig.constant = false;
+                portConfig.desc = getDstMemDesc(itpd, i);
+                config.outConfs.push_back(portConfig);
+
+                if (withFusedSum) {
+                    portConfig.inPlace = -1;
+                    portConfig.desc = MemoryDescUtils::cloneWithNewPrecision(*portConfig.desc,
+                                                                             MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType));
+                    config.inConfs.push_back(portConfig);
+                }
+            }
+
+            impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
+
+            supportedPrimitiveDescriptors.emplace_back(config, impl_type);
+            if (!itpd.next_impl())
+                break;
+        }
+    }
+}
+
+void MKLDNNFullyConnectedNode::initDescriptor(const NodeConfig& config) {
+    auto *selectedPD = getSelectedPrimitiveDescriptor();
+    if (!selectedPD) {
+        return;
+    }
+
+    // attr[0] - depthwise, quantize
+    // attr[1] - binary
+    // mkldnn::primitive_attr attrs[1];
+    // setPostOps(attrs[0]);
+//    setPostOps(attrs[1], false, true);
+    auto attr = initPrimitiveAttr();
+
+    auto rightConfig = selectedPD->getConfig();
+    size_t selected_count = 0;
+
+    for (size_t i = 0; i < descs.size(); i++) {
+        auto& desc = descs[i];
+        auto itpd = desc.createPrimitiveDescriptorIterator(getEngine(), *attr);
+        while (static_cast<bool>(itpd)) {
+            NodeConfig cfg;
+            cfg.dynBatchSupport = true;
+            for (size_t j = 0; j < descInputNumbers(desc); j++) {
+                PortConfig dataConfig;
+                dataConfig.inPlace = -1;
+                dataConfig.constant = false;
+                dataConfig.desc = getSrcMemDesc(itpd, j);
+                cfg.inConfs.push_back(dataConfig);
+            }
+
+            for (size_t j = 0; j < descOutputNumbers(desc); j++) {
+                PortConfig dataConfig;
+                dataConfig.inPlace = -1;
+                dataConfig.constant = false;
+                dataConfig.desc = getDstMemDesc(itpd, j);
+                if (withFusedSum) {
+                    auto eltwiseConfig = dataConfig;
+                    eltwiseConfig.desc = MemoryDescUtils::cloneWithNewPrecision(*eltwiseConfig.desc,
+                                                                                eltwisePrecision);
+                    cfg.inConfs.push_back(eltwiseConfig);
+                    dataConfig.inPlace = getParentEdges().size() - 1;
+                }
+
+                cfg.outConfs.push_back(dataConfig);
+            }
+            impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
+
+            if (selected_count == selectedPrimitiveDescriptorIndex) {
+                if (impl_type != selectedPD->getImplementationType()) {
+                    IE_THROW() << errorPrefix << "Cannot get the original layer configuration!";
+                }
+                rightConfig = cfg;
+            }
+            if (i == descs.size() - 1) {
+                if (impl_type == selectedPD->getImplementationType()) {
+                    rightConfig = config;
+                }
+            }
+            selected_count++;
+            if (!itpd.next_impl())
+                break;
+        }
+    }
+    selectedPD->setConfig(rightConfig);
+}
 
 void MKLDNNFullyConnectedNode::createPrimitive() {
     if (prim)
@@ -237,7 +380,7 @@ bool MKLDNNFullyConnectedNode::canFuse(const MKLDNNNodePtr& node) const {
     return canFuseSimpleOperation(node, inputShapes[0].getRank() == 3 ? 2 : 1);
 }
 
-void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights = false, bool initAsBinary = false) {
+void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights, bool initAsBinary) {
     bool initBinaryMemory = initWeights;
     mkldnn::post_ops ops;
 
@@ -267,14 +410,17 @@ void MKLDNNFullyConnectedNode::setPostOps(mkldnn::primitive_attr &attr, bool ini
             continue;
         }
 
-        auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get());
-        if (eltwiseNode) {
-            eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
-            if (initBinaryMemory) {
-                if (eltwiseNode->scalesMemory)
-                    binaryPostOpsArgs.push_back(eltwiseNode->scalesMemory->GetPrimitive());
-                if (eltwiseNode->shiftsMemory)
-                    binaryPostOpsArgs.push_back(eltwiseNode->shiftsMemory->GetPrimitive());
+        if (auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get())) {
+            if (eltwiseNode->isSumFusing()) {
+                ops.append_sum(1.0, outputDataType);
+            } else {
+                eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
+                if (initBinaryMemory) {
+                    if (eltwiseNode->scalesMemory)
+                        binaryPostOpsArgs.push_back(eltwiseNode->scalesMemory->GetPrimitive());
+                    if (eltwiseNode->shiftsMemory)
+                        binaryPostOpsArgs.push_back(eltwiseNode->shiftsMemory->GetPrimitive());
+                }
             }
             continue;
         }

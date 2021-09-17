@@ -5,6 +5,7 @@
 #include "mkldnn_graph_optimizer.h"
 
 #include "mkldnn_extension_utils.h"
+#include "nodes/mkldnn_fullyconnected_node.h"
 #include "nodes/mkldnn_reshape_node.h"
 #include "nodes/mkldnn_pooling_node.h"
 #include "nodes/mkldnn_eltwise_node.h"
@@ -115,7 +116,15 @@ void MKLDNNGraphOptimizer::ApplyCommonGraphOptimizations(MKLDNNGraph &graph) {
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseFullyConnectedAndSimpleOperation");
-    FuseFullyConnectedAndSimpleOperation(graph);
+    FuseFullyConnectedAndSimpleOperation(graph); // fuse everything before Sum
+    graph.RemoveDroppedNodes();
+
+    OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseConvolutionSumAndConvolutionSumActivation");
+    FuseConvolutionSumAndConvolutionSumActivation(graph); // fuse Sum
+    graph.RemoveDroppedNodes();
+
+    OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseFullyConnectedAndSimpleOperation");
+    FuseFullyConnectedAndSimpleOperation(graph); // fuse everything after Sum
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMatMulAndSimpleOperation");
@@ -994,9 +1003,9 @@ static bool is_data_dependency(const std::shared_ptr<MKLDNNNode> &parent,
  *
  *        ***             ***                   ***             ***
  *         |               |                     |               |
- *    +========+       +========+           +========+       +========+
- *    |  any   |       | conv 2 |           |  any   |       | conv 2 |
- *    +========+       +========+           +========+       +========+
+ *    +========+       +======+           +========+         +======+
+ *    | merged |       | peer |           | merged |         | peer |
+ *    +========+       +======+           +========+         +======+
  *         |               |                     |               |
  *      +=====================+               +=====================+
  *      |         Sum         |      or       |         Sum         |
@@ -1010,117 +1019,117 @@ static bool is_data_dependency(const std::shared_ptr<MKLDNNNode> &parent,
  *
  *  After:
  *
- *        ***             ***
- *         |               |
- *    +========+       +========+
- *    |  any   |-------|        |
- *    +========+       | conv2  |
- *                     |   +    |
- *                     |  sum   |
- *                     |   +    |
- *                     | [relu] |
- *                     |        |
- *                     +========+
- *                         |
- *                 +-------+
- *                 |
- *                ***
+ *       ***             ***
+ *        |               |
+ *    +========+      +======+
+ *    |        |------| peer |
+ *    | merged |      +======+
+ *    |   +    |
+ *    |  Sum   |
+ *    |   +    |
+ *    | [Relu] |
+ *    |        |
+ *    +========+
+ *        |
+ *       ***
  */
 
 void MKLDNNGraphOptimizer::FuseConvolutionSumAndConvolutionSumActivation(MKLDNNGraph &graph) {
-    auto &graphNodes = graph.GetNodes();
+    const std::vector<MKLDNNNodePtr> &graphNodes = graph.GetNodes();
 
-    auto isFusingSupported = [&](MKLDNNNodePtr conv, MKLDNNNodePtr child) {
+    auto isFusingSupported = [&](const MKLDNNNodePtr& conv, const MKLDNNNodePtr& child) {
         return child->getType() == Eltwise &&
                 one_of(child->getAlgorithm(), EltwiseRelu, EltwiseElu, EltwiseSigmoid, EltwiseClamp, EltwiseSwish, EltwiseHswish,
                                               EltwiseMish, EltwiseHsigmoid, EltwiseRoundHalfToEven, EltwiseRoundHalfAwayFromZero, EltwiseSoftRelu);
     };
 
-    for (auto &graphNode : graphNodes) {
-        if (graphNode->getType() != Eltwise)
+    for (const auto &graphNode : graphNodes) {
+        if (!(graphNode->getType()      == Eltwise &&
+              graphNode->getAlgorithm() == EltwiseAdd))
             continue;
 
-        if (graphNode->getAlgorithm() != EltwiseAdd) continue;
-        if (std::dynamic_pointer_cast<MKLDNNEltwiseNode>(graphNode)->isWithBroadcast()) continue;
+        if (graphNode->getType() == Eltwise &&
+            std::dynamic_pointer_cast<MKLDNNEltwiseNode>(graphNode)->isWithBroadcast()) continue;
 
         // TODO: Enlarge to several inputs
-        bool isSuitableNode = graphNode->getParentEdges().size() == 2;
-        if (!isSuitableNode)
+        if (graphNode->getParentEdges().size() != 2)
             continue;
 
-        auto parent1 = graphNode->getParentEdgesAtPort(0)[0]->getParent();
-        auto parent2 = graphNode->getParentEdgesAtPort(1)[0]->getParent();
+        MKLDNNNodePtr parent1;
+        MKLDNNNodePtr parent2;
 
-        bool isSuitableParent1 = parent1->getType() == Convolution || parent1->getType() == BinaryConvolution;
-        bool isSuitableParent2 = parent2->getType() == Convolution || parent2->getType() == BinaryConvolution;
+        for (const auto& parentEdge : graphNode->getParentEdges()) {
+            if (graphNode->getParentEdges().size() > 2 && parentEdge.lock()->getParent()->isConstant())
+                continue;
+            if (!parent1)
+                parent1 = parentEdge.lock()->getParent();
+            else
+                parent2 = parentEdge.lock()->getParent();
+        }
 
-        auto canFuseSum = [](MKLDNNBinaryConvolutionNode *binConv, MKLDNNNodePtr fuseCandidate) {
-            if (binConv->getImplType() == impl_desc_type::ref)
-                return false;
+        auto isSuitableParent = [](const MKLDNNNodePtr& parent) {
+            auto canFuseSum = [](MKLDNNBinaryConvolutionNode *binConv) {
+                if (binConv->getImplType() == impl_desc_type::ref)
+                    return false;
 
-            if (binConv->isFusedWith(FakeQuantize))
-                return false;
+                if (binConv->isFusedWith(FakeQuantize))
+                    return false;
 
-            if (fuseCandidate->getAlgorithm() == EltwiseAdd) {
                 for (auto& fusedNode : binConv->fusedWith) {
                     const auto eltwise = std::dynamic_pointer_cast<MKLDNNEltwiseNode>(fusedNode);
-                    if (eltwise && eltwise->isSpecialConvolutionAddFusing()) {
+                    if (eltwise && eltwise->isSumFusing()) {
                         return false;
                     }
                 }
+
                 return true;
+            };
+
+            if (auto* binConv = dynamic_cast<MKLDNNBinaryConvolutionNode *>(parent.get())) {
+                return canFuseSum(binConv);
+            } else if (auto* conv = dynamic_cast<MKLDNNConvolutionNode *>(parent.get())) {
+                if (!conv->canBeExecutedInInt8()) {
+                    return conv->getFusedWith().empty();
+                } else {
+                    return true;
+                }
+            } else if (const auto* fc = dynamic_cast<MKLDNNFullyConnectedNode *>(parent.get())) {
+                return fc->shouldFuseSum();
             }
+
             return false;
         };
 
-        auto* binConvNode1 = dynamic_cast<MKLDNNBinaryConvolutionNode *>(parent1.get());
-        if (binConvNode1) {
-            isSuitableParent1 = isSuitableParent1 && canFuseSum(binConvNode1, graphNode);
-        }
-
-        auto* binConvNode2 = dynamic_cast<MKLDNNBinaryConvolutionNode *>(parent2.get());
-        if (binConvNode2) {
-            isSuitableParent2 = isSuitableParent2 && canFuseSum(binConvNode2, graphNode);
-        }
-
-        auto* convNode1 = dynamic_cast<MKLDNNConvolutionNode *>(parent1.get());
-        if (convNode1) {
-            if (!convNode1->canBeExecutedInInt8()) {
-                isSuitableParent1 = isSuitableParent1 && convNode1->getFusedWith().empty();
-            }
-        }
-
-        auto* convNode2 = dynamic_cast<MKLDNNConvolutionNode *>(parent2.get());
-        if (convNode2) {
-            if (!convNode2->canBeExecutedInInt8()) {
-                isSuitableParent2 = isSuitableParent2 && convNode2->getFusedWith().empty();
-            }
-        }
+        bool isSuitableParent1 = isSuitableParent(parent1);
+        bool isSuitableParent2 = isSuitableParent(parent2);
 
         if (!isSuitableParent1 && !isSuitableParent2)
             continue;
 
-        auto mergedConv = isSuitableParent1 ? parent1 : parent2;
-        auto peerNode = isSuitableParent1 ? parent2 : parent1;
+        auto  mergedNode = isSuitableParent1 ? parent1 : parent2;
+        auto  peerNode = isSuitableParent1 ? parent2 : parent1;
+
         if (isSuitableParent1 && isSuitableParent2) {
+            // TODO does this check make any sence?
             if ((peerNode->getType() == Convolution || peerNode->getType() == BinaryConvolution) &&
-                mergedConv->getChildEdges().size() != 1) {
-                mergedConv = parent2;
+                parent1->getChildEdges().size() != 1) {
+                mergedNode = parent2;
                 peerNode = parent1;
             }
         }
         if (peerNode->isConstant())
             continue;
+
         auto sum = graphNode;
 
-        if (mergedConv->isConstant() && !sum->isConstant())
+        if (mergedNode->isConstant() && !sum->isConstant())
             continue;
 
         auto lastNode = sum;
 
-        bool fuse_allowed = mergedConv->getChildEdges().size() == 1;
-        for (size_t j = 0; fuse_allowed && j < mergedConv->getParentEdges().size(); j++)
-            if (mergedConv->getParentEdgesAtPort(j)[0]->getParent() == peerNode)
+        bool fuse_allowed = mergedNode->getChildEdges().size() == 1;
+        for (size_t j = 0; fuse_allowed && j < mergedNode->getParentEdges().size(); j++)
+            if (mergedNode->getParentEdgesAtPort(j)[0]->getParent() == peerNode)
                 fuse_allowed = false;
 
         // Fused Conv+Sum prim will be used inplace. That's mean that input blob will
@@ -1138,19 +1147,19 @@ void MKLDNNGraphOptimizer::FuseConvolutionSumAndConvolutionSumActivation(MKLDNNG
                 isFusingSupported(graphNode, graphNode->getChildEdgeAt(0)->getChild())) {
             auto relu_shared = graphNode->getChildEdgeAt(0)->getChild();
             lastNode = relu_shared;
-            if (mergedConv->isConstant() && !lastNode->isConstant())
+            if (mergedNode->isConstant() && !lastNode->isConstant())
                 continue;
-            sum->fuseInto(mergedConv);
+            sum->fuseInto(mergedNode);
         }
 
-        lastNode->fuseInto(mergedConv);
+        lastNode->fuseInto(mergedNode);
 
-        if (mergedConv->fusedWith.size() > 0 &&
-           (mergedConv->fusedWith[0]->getType() == Convolution || mergedConv->fusedWith[0]->getType() == BinaryConvolution)) {
+        if (mergedNode->fusedWith.size() > 0 &&
+           (mergedNode->fusedWith[0]->getType() == Convolution || mergedNode->fusedWith[0]->getType() == BinaryConvolution)) {
             // Merged with DW_conv. Shape may change
-            mergedConv->inputShapes.push_back(mergedConv->fusedWith[0]->outputShapes[0]);
+            mergedNode->inputShapes.push_back(mergedNode->fusedWith[0]->outputShapes[0]);
         } else {
-            mergedConv->inputShapes.push_back(mergedConv->outputShapes[0]);
+            mergedNode->inputShapes.push_back(mergedNode->outputShapes[0]);
         }
 
         size_t childIdx = 0lu;
@@ -1160,22 +1169,16 @@ void MKLDNNGraphOptimizer::FuseConvolutionSumAndConvolutionSumActivation(MKLDNNG
             }
         }
 
-        int peer_port = peerNode->getChildEdgeAt(childIdx)->getInputNum();
+        const int peerPort = peerNode->getChildEdgeAt(childIdx)->getInputNum();
         peerNode->getChildEdgeAt(childIdx)->drop();
 
-        int childPort = 1;
-        auto* mergedConvNode = dynamic_cast<MKLDNNConvolutionNode*>(mergedConv.get());
-        if (mergedConvNode != nullptr)
-            childPort = mergedConvNode->getParentEdges().size();
+        // new edge for mergedNode
+        const int childPort = mergedNode->getParentEdges().size();
 
-        auto* mergedBinConvNode = dynamic_cast<MKLDNNBinaryConvolutionNode*>(mergedConv.get());
-        if (mergedBinConvNode != nullptr)
-            childPort = mergedBinConvNode->getParentEdges().size();
-
-        MKLDNNEdgePtr edgePtr(new MKLDNNEdge(peerNode, mergedConv, peer_port, childPort));
+        MKLDNNEdgePtr edgePtr(new MKLDNNEdge(peerNode, mergedNode, peerPort, childPort));
         graph.GetEdges().push_back(edgePtr);
 
-        mergedConv->addEdge(edgePtr);
+        mergedNode->addEdge(edgePtr);
 
         std::vector<MKLDNNEdgeWeakPtr> edges_to_reconnect = lastNode->getChildEdges();
         for (auto &edge_w : edges_to_reconnect) {
@@ -1189,7 +1192,7 @@ void MKLDNNGraphOptimizer::FuseConvolutionSumAndConvolutionSumActivation(MKLDNNG
 
             edge->drop();
 
-            MKLDNNEdgePtr newEdge(new MKLDNNEdge(mergedConv, child, idxParent, idxChild));
+            MKLDNNEdgePtr newEdge(new MKLDNNEdge(mergedNode, child, idxParent, idxChild));
             graph.GetEdges().push_back(newEdge);
             child->addEdge(newEdge);
         }

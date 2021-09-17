@@ -935,7 +935,7 @@ void MKLDNNBinaryConvolutionNode::getSupportedDescriptors() {
     int expectedInputEdgesNum = 2;
     for (int i = 0; i < fusedWith.size(); i++) {
         auto *eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusedWith[i].get());
-        if (eltwiseNode && eltwiseNode->isSpecialConvolutionAddFusing()) {
+        if (eltwiseNode && eltwiseNode->isSumFusing()) {
             withSum = true;
             expectedInputEdgesNum++;
         }
@@ -1127,7 +1127,7 @@ void MKLDNNBinaryConvolutionNode::setPostOps(mkldnn::primitive_attr &attr) {
     for (auto &node : fusedWith) {
         auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get());
         if (eltwiseNode) {
-            if (eltwiseNode->isSpecialConvolutionAddFusing())
+            if (eltwiseNode->isSumFusing())
                 ops.append_sum(1.0);
             else
                 eltwiseNode->appendPostOps(ops);

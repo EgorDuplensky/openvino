@@ -90,7 +90,7 @@ public:
     mkldnn::algorithm getMKLDNNAlgorithm() const { return mkldnnAlgorithm; }
 
     bool isWithBroadcast();
-    bool isSpecialConvolutionAddFusing() const { return specialConvolutionAddFusing; }
+    bool isSumFusing() const { return sumFusing; }
 
     static bool isSupportedOperation(const std::shared_ptr<const ngraph::Node>& op, std::string& errorMessage) noexcept;
 
@@ -104,7 +104,7 @@ private:
     int optimalTensorRank = 6;
     bool canUseOptimizedImpl = false;
     bool isDynBatchEnabled = false;
-    bool specialConvolutionAddFusing = false;
+    bool sumFusing = false;
     size_t batchDimIdx = 0;
     size_t tensorRank = 0;
     size_t fullWorkAmount = 0;

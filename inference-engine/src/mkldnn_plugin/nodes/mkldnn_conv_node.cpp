@@ -161,7 +161,7 @@ void MKLDNNConvolutionNode::getSupportedDescriptors() {
 
         if (fusedWith[i]->getAlgorithm() == EltwiseAdd) {
             auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusedWith[i].get());
-            if (eltwiseNode && eltwiseNode->isSpecialConvolutionAddFusing()) {
+            if (eltwiseNode && eltwiseNode->isSumFusing()) {
                 withSum = true;
                 expectedInputEdgesNum++;
             }
@@ -185,7 +185,7 @@ void MKLDNNConvolutionNode::getSupportedDescriptors() {
         for (int i = 0; i < fusedWith.size(); i++) {
             if (fusedWith[i]->getAlgorithm() == EltwiseAdd) {
                 auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusedWith[i].get());
-                if (eltwiseNode && eltwiseNode->isSpecialConvolutionAddFusing()) {
+                if (eltwiseNode && eltwiseNode->isSumFusing()) {
                     eltwisePrecision = fusedEltwisePrecision(fusedWith[i]);
                     if (MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType).size() != eltwisePrecision.size()) {
                         eltwisePrecision = Precision::FP32;
@@ -266,7 +266,7 @@ void MKLDNNConvolutionNode::getSupportedDescriptors() {
         for (int i = 0; i < fusedWith.size(); i++) {
             if (fusedWith[i]->getAlgorithm() == EltwiseAdd) {
                 auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusedWith[i].get());
-                if (eltwiseNode && eltwiseNode->isSpecialConvolutionAddFusing()) {
+                if (eltwiseNode && eltwiseNode->isSumFusing()) {
                     eltwisePrecision = fusedEltwisePrecision(fusedWith[i]);
                     // TODO(amalyshe): there might be situation when convolution can be executed in BF16,
                     // output is required in FP32 but eltwise inplace tensor would be in BF16
@@ -339,7 +339,7 @@ void MKLDNNConvolutionNode::setPostOps(mkldnn::primitive_attr &attr, bool initWe
 
         auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get());
         if (eltwiseNode) {
-            if (eltwiseNode->isSpecialConvolutionAddFusing()) {
+            if (eltwiseNode->isSumFusing()) {
                 ops.append_sum(1.0, MKLDNNExtensionUtils::IEPrecisionToDataType(eltwisePrecision));
             } else {
                 eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory);
@@ -362,7 +362,7 @@ void MKLDNNConvolutionNode::setPostOps(mkldnn::primitive_attr &attr, bool initWe
                     auto &nextNode = fusedWith[j];
 
                     auto *nextEltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(nextNode.get());
-                    if (nextEltwiseNode && nextEltwiseNode->isSpecialConvolutionAddFusing()) {
+                    if (nextEltwiseNode && nextEltwiseNode->isSumFusing()) {
                         hasSubsequentSum = true;
                     }
 
