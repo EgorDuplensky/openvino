@@ -123,8 +123,8 @@ void MKLDNNGraphOptimizer::ApplyCommonGraphOptimizations(MKLDNNGraph &graph) {
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMatmulAndAddAsBinary");
-    FuseMatmulAndAddAsBinary(graph);
-    graph.RemoveDroppedNodes();
+//    FuseMatmulAndAddAsBinary(graph);
+//    graph.RemoveDroppedNodes();
 
     FuseMatMulAndSimpleOperation(graph);
     graph.RemoveDroppedNodes();
