@@ -134,7 +134,18 @@ void MKLDNNMatMulNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights
                 // ops.append_sum(1.0, outputDataType);
                 ops.append_sum(1.0);
             } else {
-                eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory);
+                auto outShape = outputShapes[0].getStaticDims();
+                auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
+
+                std::vector<size_t> binaryShape(outShape.size(), 1);
+                binaryShape[chIdx] = outShape[chIdx];
+
+//                size_t binaryShapeRank = outputShapes[0].getRank() == 3 ? 2 : outputShapes[0].getRank();
+//                std::vector<size_t> binaryShape(binaryShapeRank, 1);
+//                size_t channelAxis = outputShapes[0].getRank() == 3 ? 2 : 1;
+//                binaryShape[1] = outputShapes[0].getStaticDims()[channelAxis];
+
+                eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
                 if (initBinaryMemory) {
                     if (eltwiseNode->scalesMemory)
                         binaryPostOpsArgs.push_back(eltwiseNode->scalesMemory->GetPrimitive());

@@ -128,52 +128,52 @@ void MKLDNNFullyConnectedNode::getSupportedDescriptors() {
     }
 }
 
-void MKLDNNFullyConnectedNode::initSupportedPrimitiveDescriptors() {
-    if (!supportedPrimitiveDescriptors.empty())
-        return;
-
-    auto attr = initPrimitiveAttr();
-
-    for (auto& desc : descs) {
-        auto itpd = desc.createPrimitiveDescriptorIterator(getEngine(), *attr);
-        while (static_cast<bool>(itpd)) {
-            NodeConfig config;
-            config.dynBatchSupport = true;
-
-            for (size_t i = 0; i < getOriginalInputsNumber(); i++) {
-                PortConfig portConfig;
-                portConfig.inPlace = -1;
-                portConfig.constant = false;
-                portConfig.desc = getSrcMemDesc(itpd, i);
-                config.inConfs.push_back(portConfig);
-            }
-
-            for (size_t i = 0; i < descOutputNumbers(desc); i++) {
-                PortConfig portConfig;
-
-                portConfig.constant = false;
-                portConfig.desc = getDstMemDesc(itpd, i);
-                config.outConfs.push_back(portConfig);
-
-                for (const auto& fusee : fusedWith) {
-                    if (const auto *eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusee.get())) {
-                        if (eltwiseNode->getAlgorithm() == EltwiseAdd && eltwiseNode->getMKLDNNAlgorithm() == dnnl::algorithm::undef) {
-                            portConfig.desc = MemoryDescUtils::cloneWithNewPrecision(*portConfig.desc,
-                                                                                     MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType));
-                            config.inConfs.push_back(portConfig);
-                        }
-                    }
-                }
-            }
-
-            impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
-
-            supportedPrimitiveDescriptors.emplace_back(config, impl_type);
-            if (!itpd.next_impl())
-                break;
-        }
-    }
-}
+//void MKLDNNFullyConnectedNode::initSupportedPrimitiveDescriptors() {
+//    if (!supportedPrimitiveDescriptors.empty())
+//        return;
+//
+//    auto attr = initPrimitiveAttr();
+//
+//    for (auto& desc : descs) {
+//        auto itpd = desc.createPrimitiveDescriptorIterator(getEngine(), *attr);
+//        while (static_cast<bool>(itpd)) {
+//            NodeConfig config;
+//            config.dynBatchSupport = true;
+//
+//            for (size_t i = 0; i < getOriginalInputsNumber(); i++) {
+//                PortConfig portConfig;
+//                portConfig.inPlace = -1;
+//                portConfig.constant = false;
+//                portConfig.desc = getSrcMemDesc(itpd, i);
+//                config.inConfs.push_back(portConfig);
+//            }
+//
+//            for (size_t i = 0; i < descOutputNumbers(desc); i++) {
+//                PortConfig portConfig;
+//
+//                portConfig.constant = false;
+//                portConfig.desc = getDstMemDesc(itpd, i);
+//                config.outConfs.push_back(portConfig);
+//
+//                for (const auto& fusee : fusedWith) {
+//                    if (const auto *eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(fusee.get())) {
+//                        if (eltwiseNode->getAlgorithm() == EltwiseAdd && eltwiseNode->getMKLDNNAlgorithm() == dnnl::algorithm::undef) {
+//                            portConfig.desc = MemoryDescUtils::cloneWithNewPrecision(*portConfig.desc,
+//                                                                                     MKLDNNExtensionUtils::DataTypeToIEPrecision(outputDataType));
+//                            config.inConfs.push_back(portConfig);
+//                        }
+//                    }
+//                }
+//            }
+//
+//            impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
+//
+//            supportedPrimitiveDescriptors.emplace_back(config, impl_type);
+//            if (!itpd.next_impl())
+//                break;
+//        }
+//    }
+//}
 
 void MKLDNNFullyConnectedNode::createPrimitive() {
     if (prim)

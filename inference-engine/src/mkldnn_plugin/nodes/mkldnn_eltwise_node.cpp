@@ -1733,11 +1733,11 @@ void MKLDNNEltwiseNode::appendPostOps(mkldnn::post_ops& ops, bool initAsBinary, 
                 if (data.empty())
                     IE_THROW() << errorPrefix << "cannot be performed since buffers are not allocated";
 
-                auto outShape = outputShapes[0].getStaticDims();
-                auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
-
-                std::vector<size_t> binaryShape(outShape.size(), 1);
-                binaryShape[chIdx] = outShape[chIdx];
+//                auto outShape = outputShapes[0].getStaticDims();
+//                auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
+//
+//                std::vector<size_t> binaryShape(outShape.size(), 1);
+//                binaryShape[chIdx] = outShape[chIdx];
 
                 DnnlBlockedMemoryDesc memoryDesc(Precision::FP32, Shape(binaryShape));
                 ops.append_binary(alg, memoryDesc.getDnnlDesc());
