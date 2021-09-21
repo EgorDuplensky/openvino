@@ -57,7 +57,7 @@ private:
     std::vector<std::shared_ptr<mkldnn::convolution_backward_data::desc>> descs_bwd;
 
     mkldnn::primitive_attr attr;
-    void setPostOps(mkldnn::primitive_attr &attr);
+    void setPostOps(mkldnn::primitive_attr &attr, bool initWeights, bool initAsBinary);
 
     std::string errorPrefix;
 

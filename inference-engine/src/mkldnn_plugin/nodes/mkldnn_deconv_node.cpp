@@ -153,8 +153,8 @@ InferenceEngine::Blob::Ptr MKLDNNDeconvolutionNode::createWeiBlobAsIO(InferenceE
 
 bool MKLDNNDeconvolutionNode::canBeExecutedInInt8() const {
     // todo: [antonvor] added these checks to fix performance problems
-    if (kernel.size() == 3)
-        return false;
+    // if (kernel.size() == 3)
+    //     return false;
     if (!withGroups && stride.back() > 3)
         return false;
     if (!impl::cpu::x64::mayiuse(impl::cpu::x64::avx512_common)) {
@@ -260,21 +260,48 @@ void MKLDNNDeconvolutionNode::getSupportedDescriptors() {
             createDescriptor({in_candidate}, {out_candidate});
         }
     }
-    setPostOps(attr);
+    setPostOps(attr, true, true);
 }
 
-void MKLDNNDeconvolutionNode::setPostOps(mkldnn::primitive_attr &attr) {
+void MKLDNNDeconvolutionNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights = false, bool initAsBinary = false) {
+    bool initBinaryMemory = initWeights;
     mkldnn::post_ops ops;
+
+    size_t binaryShapeRank = outputShapes[0].getRank();
+    std::vector<size_t> binaryShape(binaryShapeRank, 1);
+    const auto chIdx = outputShapes[0].getRank() > 1 ? 1 : 0;
+    binaryShape[chIdx] = outputShapes[0].getStaticDims()[chIdx];
 
     for (auto &node : fusedWith) {
         auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get());
         if (eltwiseNode) {
-            eltwiseNode->appendPostOps(ops);
+            eltwiseNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
+            if (initBinaryMemory) {
+                if (eltwiseNode->scalesMemory)
+                    binaryPostOpsArgs.push_back(eltwiseNode->scalesMemory->GetPrimitive());
+                if (eltwiseNode->shiftsMemory)
+                    binaryPostOpsArgs.push_back(eltwiseNode->shiftsMemory->GetPrimitive());
+            }
             continue;
         }
         auto* fakeQuantizeNode = dynamic_cast<MKLDNNFakeQuantizeNode *>(node.get());
         if (fakeQuantizeNode) {
-            fakeQuantizeNode->appendPostOps(ops);
+            fakeQuantizeNode->appendPostOps(ops, initAsBinary, initBinaryMemory, binaryShape);
+            if (initBinaryMemory) {
+                if (fakeQuantizeNode->cropHighMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->cropHighMemory->GetPrimitive());
+                if (fakeQuantizeNode->cropLowMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->cropLowMemory->GetPrimitive());
+                if (fakeQuantizeNode->inputScaleMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->inputScaleMemory->GetPrimitive());
+                if (fakeQuantizeNode->inputShiftMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->inputShiftMemory->GetPrimitive());
+                if (fakeQuantizeNode->outputScaleMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->outputScaleMemory->GetPrimitive());
+                if (fakeQuantizeNode->outputShiftMemory)
+                    binaryPostOpsArgs.push_back(fakeQuantizeNode->outputShiftMemory->GetPrimitive());
+            }
+
             continue;
         }
         IE_THROW() << "Fusing of " << NameFromType(node->getType()) << " operation to " << NameFromType(this->getType()) << " node is not implemented";
@@ -350,6 +377,14 @@ void MKLDNNDeconvolutionNode::createPrimitive() {
         auto weights = getParentEdgeAt(1)->getMemory().GetPrimitive();
         auto dst = getChildEdgesAtPort(0)[0]->getMemoryPtr()->GetPrimitive();
         primArgs = {{DNNL_ARG_DIFF_DST, src}, {DNNL_ARG_WEIGHTS, weights}, {DNNL_ARG_DIFF_SRC, dst}};
+    }
+
+    auto post_ops = attr.get_post_ops();
+    int idx = 0;
+    for (int i = 0; i < post_ops.len(); i++) {
+        if (post_ops.kind(i) == mkldnn::primitive::kind::binary) {
+            primArgs.insert({DNNL_ARG_ATTR_MULTIPLE_POST_OP(i) | DNNL_ARG_SRC_1, binaryPostOpsArgs[idx++]});
+        }
     }
 }
 
