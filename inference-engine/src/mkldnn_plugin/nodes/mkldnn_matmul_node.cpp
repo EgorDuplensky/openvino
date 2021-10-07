@@ -21,6 +21,7 @@
 #include "common/cpu_memcpy.h"
 #include <ngraph/opsets/opset1.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
+#include "nodes/mkldnn_fake_quantize_node.h"
 #include "utils/general_utils.h"
 #include "memory_desc/cpu_memory_desc_utils.h"
 #include "mkldnn_extension_utils.h"
@@ -79,17 +80,30 @@ MKLDNNMatMulNode::MKLDNNMatMulNode(const std::shared_ptr<ngraph::Node>& op, cons
 }
 
 bool MKLDNNMatMulNode::canFuse(const MKLDNNNodePtr& node) const {
-    return one_of(node->getAlgorithm(), EltwiseRelu, EltwiseGelu, EltwiseElu, EltwiseSigmoid, EltwiseClamp, EltwiseTanh,
-                  EltwiseSwish, EltwiseHswish, EltwiseMish, EltwiseHsigmoid, EltwiseRoundHalfToEven,
-                  EltwiseRoundHalfAwayFromZero, EltwiseAbs, EltwiseSqrt, EltwiseSoftRelu);
+    return canFuseSimpleOperation(node);
 }
 
-void MKLDNNMatMulNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights = false) const {
+void MKLDNNMatMulNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights = false) {
     mkldnn::post_ops ops;
 
-    for (auto &node : fusedWith) {
+    auto getPostOpShape = [&](){
+        auto outShape = outputShapes[0].getStaticDims();
+        auto chIdx = getChannelAxis();
+        std::vector<size_t> binaryShape(outShape.size(), 1);
+        binaryShape[chIdx] = outShape[chIdx];
+        return binaryShape;
+    };
+
+    for (const auto &node : fusedWith) {
         if (auto* eltwiseNode = dynamic_cast<MKLDNNEltwiseNode *>(node.get())) {
-            eltwiseNode->appendPostOps(ops);
+            if (eltwiseNode->getMKLDNNAlgorithm() != mkldnn::algorithm::undef) {
+                eltwiseNode->appendPostOps(ops);
+            } else {
+                eltwiseNode->appendBinPostOps(ops, getPostOpShape(), binaryPostOpsArgs);
+            }
+            continue;
+        } else if (auto* fakeQuantizeNode = dynamic_cast<MKLDNNFakeQuantizeNode *>(node.get())) {
+            fakeQuantizeNode->appendBinPostOps(ops, getPostOpShape(), binaryPostOpsArgs);
             continue;
         }
 
@@ -100,10 +114,10 @@ void MKLDNNMatMulNode::setPostOps(mkldnn::primitive_attr &attr, bool initWeights
 }
 
 
-std::shared_ptr<mkldnn::primitive_attr> MKLDNNMatMulNode::initPrimitiveAttr() const {
+std::shared_ptr<mkldnn::primitive_attr> MKLDNNMatMulNode::initPrimitiveAttr() {
     auto attr = std::make_shared<mkldnn::primitive_attr>(mkldnn::primitive_attr());
 
-    setPostOps(*attr, true);
+    setPostOps(*attr);
 
     return attr;
 }
@@ -113,6 +127,10 @@ void MKLDNNMatMulNode::getSupportedDescriptors() {
         IE_THROW()  << errorPrefix << " has incorrect number of input edges for layer " << getName();
     if (getChildEdges().empty())
         IE_THROW()  << errorPrefix << " has incorrect number of output edges for layer " << getName();
+
+    auto canBeExecutedInInt8 = [](const Precision firstInput, const Precision secondInput) {
+        return one_of(firstInput, Precision::U8, Precision::I8) && secondInput == Precision::I8;
+    };
 
     auto firstInPortPrec = getOriginalInputPrecisionAtPort(0);
     auto secondInPortPrec = getOriginalInputPrecisionAtPort(1);
@@ -130,6 +148,9 @@ void MKLDNNMatMulNode::getSupportedDescriptors() {
     if (!fusedWith.empty()) {
         outPortPrec = fusedWith[fusedWith.size() - 1]->getOriginalOutputPrecisionAtPort(0);
     }
+
+    if (!canBeExecutedInInt8(firstInPortPrec, secondInPortPrec) && one_of(outPortPrec, Precision::U8, Precision::I8))
+        outPortPrec = Precision::FP32; // INT output is not supported for non-INT inputs
 
     if (inputShapes[0].getRank() != inputShapes[1].getRank() || inputShapes[0].getRank() != outputShapes[0].getRank())
         IE_THROW()  << errorPrefix << " has invalid dims count";
@@ -290,6 +311,8 @@ void MKLDNNMatMulNode::createPrimitive() {
     auto dst = getChildEdgesAtPort(0)[0]->getMemoryPtr()->GetPrimitive();
 
     primArgs = {{DNNL_ARG_SRC_0, src0}, {DNNL_ARG_WEIGHTS_0, src1}, {DNNL_ARG_DST, dst}};
+
+    appendPostOpArgs(*attr);
 }
 
 MemoryDescPtr MKLDNNMatMulNode::getSrcMemDesc(mkldnn::primitive_desc_iterator &primitive_desc_it, size_t idx) {

@@ -6,6 +6,7 @@
 #include "ie_precision.hpp"
 #include "test_utils/fusing_test_utils.hpp"
 #include "ngraph_functions/builders.hpp"
+#include <string>
 
 using namespace ngraph;
 using namespace InferenceEngine;
@@ -64,7 +65,11 @@ protected:
         bool transpA = shapeRelatedParams.input1.second;
         bool transpB = shapeRelatedParams.input2.second;
 
-        std::tie(postOpMgrPtr, fusedOps) = fusingParams;
+        // see comment in MKLDNNFakeQuantizeNode::isSupportedOperation
+        if (!(nodeType == MatMulNodeType::MatMul &&
+              std::get<0>(fusingParams) && std::get<0>(fusingParams)->getFusedOpsNames().find("FakeQuantize(PerChannel)") != std::string::npos &&
+              std::max(inShapeA.size(), inShapeB.size()) != 3))
+            std::tie(postOpMgrPtr, fusedOps) = fusingParams;
 
         configuration.insert(additionalConfig.begin(), additionalConfig.end());
 
@@ -282,6 +287,13 @@ const std::vector<ShapeRelatedParams> IS = {
 std::vector<fusingSpecificParams> matmulFusingParams {
         emptyFusingSpec,
         fusingElu,
+        fusingPReluPerTensor,
+        fusingMultiplyPerChannel,
+        fusingFakeQuantizePerChannel,
+        /* @todo FQ unfolds into FQ + Convert + Substract + Multiply after LPT,
+         * so Relu cannot be fused in this case. Should be analysed */
+        // fusingFakeQuantizePerChannelRelu,
+        fusingFakeQuantizePerTensorRelu,
 };
 
 const auto matMulParams = ::testing::Combine(::testing::ValuesIn(IS),
