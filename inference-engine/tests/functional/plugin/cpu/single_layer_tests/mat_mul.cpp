@@ -210,10 +210,28 @@ const std::vector<ShapeRelatedParams> IS3D = {
 
 std::vector<fusingSpecificParams> fusingParamsSet3D {
         emptyFusingSpec,
-        fusingBiasFC
+        fusingBiasFC,
+        fusingMultiplyPerChannel,
+        fusingFakeQuantizePerChannel,
+        fusingFakeQuantizePerTensorRelu,
+};
+
+std::vector<fusingSpecificParams> fusingParamsSet3DBF16 {
+        emptyFusingSpec,
+        fusingBiasFC,
+        fusingMultiplyPerChannel,
 };
 
 const auto fullyConnectedParams3D = ::testing::Combine(::testing::ValuesIn(IS3D),
+                                                       ::testing::Values(Precision::FP32),
+                                                       ::testing::Values(Precision::UNSPECIFIED),
+                                                       ::testing::Values(Precision::UNSPECIFIED),
+                                                       ::testing::Values(Layout::ANY),
+                                                       ::testing::Values(helpers::InputLayerType::CONSTANT),
+                                                       ::testing::Values(CommonTestUtils::DEVICE_CPU),
+                                                       ::testing::Values(emptyAdditionalConfig));
+
+const auto fullyConnectedParams3DBF16 = ::testing::Combine(::testing::ValuesIn(IS3D),
                                                        ::testing::ValuesIn(netPRCs),
                                                        ::testing::Values(Precision::UNSPECIFIED),
                                                        ::testing::Values(Precision::UNSPECIFIED),
@@ -226,7 +244,12 @@ const auto testParams3D = ::testing::Combine(fullyConnectedParams3D,
                                              ::testing::Values(MatMulNodeType::FullyConnected),
                                              ::testing::ValuesIn(fusingParamsSet3D));
 
+const auto testParams3DBF16 = ::testing::Combine(fullyConnectedParams3DBF16,
+                                             ::testing::Values(MatMulNodeType::FullyConnected),
+                                             ::testing::ValuesIn(fusingParamsSet3DBF16));
+
 INSTANTIATE_TEST_SUITE_P(smoke_FC_3D, MatMulLayerCPUTest, testParams3D, MatMulLayerCPUTest::getTestCaseName);
+INSTANTIATE_TEST_SUITE_P(smoke_FC_3D_BF16, MatMulLayerCPUTest, testParams3DBF16, MatMulLayerCPUTest::getTestCaseName);
 
 }; // namespace fullyConnected
 
