@@ -39,6 +39,8 @@ public:
     std::shared_ptr<mkldnn::primitive_attr> initPrimitiveAttr() override;
 
 private:
+    bool withBiases;
+
     void setPostOps(mkldnn::primitive_attr &attr, bool initWeights);
 
     std::string errorPrefix;

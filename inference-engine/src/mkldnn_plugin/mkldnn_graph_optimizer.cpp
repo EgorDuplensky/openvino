@@ -57,7 +57,7 @@ MKLDNNGraphOptimizer::MKLDNNGraphOptimizer() {}
 
 void MKLDNNGraphOptimizer::ApplyCommonGraphOptimizations(MKLDNNGraph &graph) {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::MKLDNN_LT, "ApplyCommonGraphOptimizations", "FuseConvolutionAndBias");
-    FuseConvolutionAndBias(graph);
+    FuseConvolutionMatMulAndBias(graph);
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMultiplyAndAdd");
@@ -160,39 +160,35 @@ void MKLDNNGraphOptimizer::ApplyImplSpecificGraphOptimizations(MKLDNNGraph &grap
     graph.RemoveDroppedEdges();
 }
 
-void MKLDNNGraphOptimizer::FuseConvolutionAndBias(MKLDNNGraph &graph) {
+void MKLDNNGraphOptimizer::FuseConvolutionMatMulAndBias(MKLDNNGraph &graph) {
     auto& graphNodes = graph.GetNodes();
 
-    auto isSuitableParentNode = [](MKLDNNNodePtr node) {
-        return node->getType() == Convolution &&
+    auto isSuitableParentNode = [](const MKLDNNNodePtr& node) {
+        return (node->getType() == Convolution || node->getType() == MatMul) &&
                node->getChildEdges().size() == 1 &&
                node->getParentEdges().size() == 2 &&
                node->getFusedWith().empty();
     };
 
-    auto isSuitableChildNode = [&](MKLDNNNodePtr parentNode, MKLDNNNodePtr childNode) {
+    auto isSuitableChildNode = [&](const MKLDNNNodePtr& parentNode, const MKLDNNNodePtr& childNode) {
         if (childNode->getAlgorithm() != EltwiseAdd || !childNode->getFusedWith().empty() || childNode->getParentEdges().size() != 2)
             return false;
 
-        auto biasNode = childNode->getParentEdgesAtPort(1)[0]->getParent();
+        const auto biasNode = childNode->getParentEdgesAtPort(1)[0]->getParent();
         if (biasNode->getType() != Input || !biasNode->isConstant() || biasNode->getChildEdges().size() != 1)
             return false;
 
-        auto convOutDims = parentNode->getOutputShapeAtPort(0).getDims();
-        auto biasDims = getNormalizedDimsBySize(biasNode->getOutputShapeAtPort(0).getDims(),
+        const auto convOutDims = parentNode->getOutputShapeAtPort(0).getDims();
+        const auto biasDims = getNormalizedDimsBySize(biasNode->getOutputShapeAtPort(0).getDims(),
                                                 convOutDims.size());
         // TODO [NM]: Legacy ConvBias fusion transformation supports both per-tensor (via explicit broadcasing) and per-channel cases.
         // Most of the real models contain per-channel bias, so we need to reavaluate the need to support per-tensor variant.
-        if (convOutDims.size() != biasDims.size() || biasDims.size() < 2)
+        if (parentNode->getType() == Convolution && biasDims.size() < 2)
             return false;
 
-        if (biasDims[0] != 1 || !dimsEqualStrong(biasDims[1], convOutDims[1]))
+        const auto channelAxis = parentNode->getChannelAxis();
+        if (!dimsEqualStrong(biasDims[channelAxis], convOutDims[channelAxis]))
             return false;
-
-        for (int i = 2; i < biasDims.size(); i++) {
-            if (biasDims[i] != 1)
-                return false;
-        }
 
         return true;
     };
@@ -256,13 +252,13 @@ void MKLDNNGraphOptimizer::FuseConvolutionAndBias(MKLDNNGraph &graph) {
                     graph.RemoveEdge(remEdge);
                 }
 
-                auto parentEltwise = parentNode;
+                const auto& parentEltwise = parentNode;
                 MKLDNNEdgePtr newEdge(new MKLDNNEdge(parent, parentEltwise, inNum, parentEltwise->getParentEdges().size()));
-                auto &graphEdges = graph.GetEdges();
+                auto& graphEdges = graph.GetEdges();
                 graphEdges.push_back(newEdge);
                 parent->addEdge(newEdge);
 
-                parent->outputShapes[inNum] = Shape(VectorDims{parentEltwise->outputShapes[0].getStaticDims()[1]});
+                parent->outputShapes[inNum] = Shape(VectorDims{parentEltwise->outputShapes[0].getStaticDims()[parentEltwise->getChannelAxis()]});
                 parentEltwise->inputShapes.push_back(parent->outputShapes[0]);
             }
         }
