@@ -254,9 +254,10 @@ static void TransformationUpToCPUSpecificOpSet(std::shared_ptr<ngraph::Function>
     manager.set_per_pass_validation(false);
     manager.register_pass<ngraph::pass::InitNodeInfo>();
 
-    const bool useLpt =
-            _enableLPT &&
-        ngraph::pass::low_precision::LowPrecision::isFunctionQuantized(nGraphFunc);
+    const bool useLpt = false;
+        /*     _enableLPT && */
+        /* ngraph::pass::low_precision::LowPrecision::isFunctionQuantized(nGraphFunc); */
+
     auto defaultPrecisions = useLpt ? ngraph::pass::low_precision::precision_set::int8_support : std::vector<ov::element::Type>{};
     bool hasINT16orINT32Levels = false;
     if (useLpt) {

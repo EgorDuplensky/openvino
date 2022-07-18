@@ -184,7 +184,7 @@ auto check_inputs = [](InferenceEngine::InputsDataMap _networkInputs) {
 void Plugin::UpdateConfig(Config& conf, const InferenceEngine::CNNNetwork &network, const std::map<std::string, std::string> &params) const {
     OV_ITT_SCOPED_TASK(itt::domains::intel_gpu_plugin, "Plugin::UpdateConfig");
     auto device_info = GetDeviceInfo(params);
-    conf.enableInt8 = device_info.supports_imad || device_info.supports_immad;
+    conf.enableInt8 = false;
     conf.UpdateFromMap(params);
     if (conf.enableDynamicBatch) {
         conf.max_dynamic_batch = static_cast<int>(network.getBatchSize());
