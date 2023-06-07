@@ -5,6 +5,7 @@
 #pragma once
 
 #include <ie_api.h>
+#include <common/utils.hpp>
 #include <memory>
 #include <oneapi/dnnl/dnnl.hpp>
 #include <vector>
@@ -14,6 +15,7 @@
 #include <caseless.hpp>
 #include "cpu_memory.h"
 #include "edge.h"
+// #include "nodes/executors/matmul.hpp"
 #include "selective_build.h"
 #include "onednn/dnnl.h"
 #include "onednn/iml_type_mapper.h"
@@ -40,6 +42,8 @@
 #include "graph_context.h"
 #include "nodes/executors/mvn_list.hpp"
 #include "nodes/executors/executor.hpp"
+#include "post_ops.hpp"
+#include "hash_builder.hpp"
 
 namespace ov {
 namespace intel_cpu {
@@ -223,28 +227,35 @@ public:
 
     virtual void fuseInto(NodePtr& parentNode) {
         // The graph supports fusing only of consecutive nodes and some graph logic requires to know through which input port a node was fused into parent one.
-        for (size_t i = 0; i < getParentEdges().size(); i++) {
-            if (getParentEdgesAtPort(i)[0]->getParent().get() == parentNode.get()) {
-                setFusingPort(i);
-                break;
-            }
-        }
-
-        auto parentFusedNodes = parentNode->getFusedWith();
-        if (getFusingPort() < 0 && !parentFusedNodes.empty()) {
+        auto determineFusingPort = [&](){
             for (size_t i = 0; i < getParentEdges().size(); i++) {
-                if (getParentEdgesAtPort(i)[0]->getParent().get() == parentFusedNodes[parentFusedNodes.size() - 1].get()) {
-                    setFusingPort(i);
-                    break;
+                if (getParentEdgesAtPort(i)[0]->getParent().get() == parentNode.get()) {
+                    return static_cast<int>(i);
                 }
             }
-        }
 
-        if (getFusingPort() == -1) {
+            // @todo do we really need to check parent fused nodes?
+            // Is it even the case?
+            auto parentFusedNodes = parentNode->getFusedWith();
+            if (parentFusedNodes.empty())
+                return -1;
+
+            for (size_t i = 0; i < getParentEdges().size(); i++) {
+                if (getParentEdgesAtPort(i)[0]->getParent().get() == parentFusedNodes.back().get()) {
+                    return static_cast<int>(i);
+                }
+            }
+
+            return -1;
+        };
+
+        auto fusingPort = determineFusingPort();
+        if (fusingPort == -1) {
             IE_THROW() << "Cannot determine fusing port between nodes: " << parentNode->getName() << " and " << getName();
         }
 
-        parentNode->addFusedNode(getParentEdgesAtPort(getFusingPort())[0]->getChild());
+        setFusingPort(fusingPort);
+        parentNode->addFusedNode(getParentEdgesAtPort(fusingPort)[0]->getChild());
         parentNode->addOriginalLayer(getOriginalLayers());
     }
 
@@ -270,6 +281,10 @@ public:
 
     void setFusingPort(int fusingPort) {
         this->fusingPort = fusingPort;
+    }
+
+    void setName(const std::string& _name) {
+        name = _name;
     }
 
     const std::string &getName() const {
@@ -436,6 +451,13 @@ public:
         return originalOutputPrecisions;
     }
 
+    void setOriginalInputPrecisions(const std::vector<InferenceEngine::Precision>& precisions) {
+        originalInputPrecisions = precisions;
+    }
+    void setOriginalOutputPrecisions(const std::vector<InferenceEngine::Precision>& precisions) {
+        originalOutputPrecisions = precisions;
+    }
+
     InferenceEngine::Precision getOriginalInputPrecisionAtPort(size_t port) const {
         if (originalInputPrecisions.size() <= port) {
             IE_THROW() << "Incorrect input port number for node " << getName();
@@ -510,6 +532,22 @@ public:
         return isDynamic;
     }
 
+    virtual std::vector<std::pair<const std::vector<MemoryDescPtr>, const std::vector<MemoryDescPtr>>>
+    getSupportedMemoryConfigs(const std::vector<InferenceEngine::Precision>& inputPrecisions,
+                              const std::vector<Shape>& inputShapes,
+                              const std::vector<InferenceEngine::Precision>& outputPrecisions,
+                              const std::vector<Shape>& outputShapes) {
+        return {};
+    }
+
+    const std::vector<Shape>& getInputShapes() const {
+        return inputShapes;
+    }
+
+    const std::vector<Shape>& getOutputShapes() const {
+        return outputShapes;
+    }
+
     const Shape& getInputShapeAtPort(size_t port) const {
         if (inputShapes.size() <= port) {
             IE_THROW() << "Incorrect input port number for node " << getName();
@@ -554,6 +592,34 @@ public:
         return false;
     }
 
+    const GraphContext::CPtr getContext() const {
+        return context;
+    }
+
+    virtual bool isNodeGraph() const {
+        return false;
+    }
+
+    std::vector<MemoryDescPtr> getSrcMemoryDescs() {
+        std::vector<MemoryDescPtr> srcMemoryDescs;
+        for (size_t i = 0; i < getOriginalInputsNumber(); i++) {
+            srcMemoryDescs.push_back(getParentEdgeAt(i)->getMemoryPtr()->getDescPtr());
+        }
+
+        return srcMemoryDescs;
+    }
+
+    std::vector<MemoryDescPtr> getDstMemoryDescs() {
+        std::vector<MemoryDescPtr> dstMemoryDescs;
+        for (size_t i = 0; i < getOriginalOutputsNumber(); i++) {
+            dstMemoryDescs.push_back(getChildEdgeAt(i)->getMemoryPtr()->getDescPtr());
+        }
+
+        return dstMemoryDescs;
+    }
+
+    virtual ExecutorPtr createExecutor() { return {nullptr}; }
+
 protected:
     bool canFuseSimpleOperation(const NodePtr& node) const;
 
@@ -584,6 +650,7 @@ protected:
 
     std::string originalLayers;  // contains names of the original layers separated by comma
 
+    // Node(const GraphContext::CPtr ctx);
     Node(const std::shared_ptr<ngraph::Node>& op, const GraphContext::CPtr ctx, const ShapeInferFactory& shapeInferFactory);
     Node(const std::string& type, const std::string& name, const GraphContext::CPtr ctx);
 

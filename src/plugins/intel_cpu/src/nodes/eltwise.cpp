@@ -2444,11 +2444,13 @@ void Eltwise::fuseInto(NodePtr& parentNode) {
         getAlgorithm() == Algorithm::EltwiseAdd &&
         dimsEqualWeak(getInputShapeAtPort(0).getDims(), getInputShapeAtPort(1).getDims()) &&
         !getParentEdgeAt(0)->getParent()->isConstant() && !getParentEdgeAt(1)->getParent()->isConstant();
+
     if ((scales.empty() && shifts.empty()) &&
         !specialConvolutionAddFusing &&
         canBePerformedAsScaleShift(parentNode.get())) {
         std::tie(scales, shifts) = getScalesAndShifts(parentNode.get());
     }
+
     Node::fuseInto(parentNode);
 }
 

@@ -5,6 +5,7 @@
 #include "node.h"
 #include "edge.h"
 #include "extension_mngr.h"
+#include "nodes/executors/executor.hpp"
 #include "partitioned_mem_mgr.h"
 #include "itt.h"
 
@@ -51,6 +52,7 @@
 #include "dnnl_extension_utils.h"
 
 #include "nodes/common/cpu_memcpy.h"
+#include "utils/debug_capabilities.h"
 #include "utils/rt_info/memory_formats_attribute.hpp"
 #include <ngraph/opsets/opset1.hpp>
 
@@ -79,6 +81,9 @@ Node::NodesFactory & Node::factory() {
     static NodesFactory factoryInstance;
     return factoryInstance;
 }
+
+// Node::Node(const GraphContext::CPtr ctx) {
+// }
 
 Node::Node(const std::shared_ptr<ngraph::Node>& op,
            const GraphContext::CPtr ctx,
@@ -208,7 +213,9 @@ void Node::addEdge(const EdgeWeakPtr& edge) {
     if (!parentPtr || !childPtr)
         return;
 
+    DEBUG_LOG("Add edge: ", edgePtr->name(), " to child edges of ", parentPtr->getName(), "\n");
     parentPtr->childEdges.push_back(edge);
+    DEBUG_LOG("Add edge: ", edgePtr->name(), " to parent edges of ", childPtr->getName(), "\n");
     childPtr->parentEdges.push_back(edge);
 }
 
@@ -1285,7 +1292,7 @@ Node* Node::NodesFactory::create(const std::shared_ptr<ngraph::Node>& op, const 
     // Note that the op type and its friendly name will also be provided if we fail to create the node.
     auto getExceptionDescWithoutStatus = [](const InferenceEngine::Exception& ex) {
         std::string desc = ex.what();
-        size_t pos = desc.find("]");
+        size_t pos = desc.find(']');
         if (pos != std::string::npos) {
             if (desc.size() == pos + 1) {
                 desc.erase(0, pos + 1);

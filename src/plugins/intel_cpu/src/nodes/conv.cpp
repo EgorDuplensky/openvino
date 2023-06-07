@@ -12,6 +12,7 @@
 #include "concat.h"
 #include <graph.h>
 #include "cpu/x64/cpu_isa_traits.hpp"
+#include <chrono>
 #include <common/c_types_map.hpp>
 #include <cstdlib>
 #include <memory>

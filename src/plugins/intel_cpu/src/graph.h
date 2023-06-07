@@ -7,12 +7,15 @@
 #include "cpp/ie_cnn_network.h"
 #include "config.h"
 #include "cpu_memory.h"
+#include "nodes/executors/executor.hpp"
 #include "normalize_preprocess.h"
 #include "node.h"
+#include "nodes/input.h"
 #include "edge.h"
 #include "cache/multi_cache.h"
 #include "dnnl_scratch_pad.h"
 #include "graph_context.h"
+#include <iostream>
 #include <map>
 #include <string>
 #include <vector>
@@ -27,7 +30,7 @@ namespace intel_cpu {
 class InferRequestBase;
 class InferRequest;
 
-class Graph {
+class Graph : public Executor {
 public:
     typedef std::shared_ptr<Graph> Ptr;
 
@@ -38,6 +41,13 @@ public:
     };
 
     Graph() = default;
+
+    Graph(std::string name,
+          const GraphContext::CPtr ctx)
+        : reuse_io_tensors(false),
+          _name(name),
+          context(ctx) {}
+
     ~Graph();
 
     bool IsReady() {
@@ -56,6 +66,17 @@ public:
                      const GraphContext::CPtr ctx,
                      std::string name);
 
+
+    void CreateGraphNoInit(const GraphContext::CPtr ctx,
+                           std::string name) {
+        std::cout << "Creating graph: " << name << "\n";
+
+        context = ctx;
+
+        this->_name = std::move(name);
+        this->reuse_io_tensors = false;
+    }
+
     bool hasMeanImageFor(const std::string& name) {
         return _normalizePreprocMap.find(name) != _normalizePreprocMap.end();
     }
@@ -64,6 +85,73 @@ public:
     void PullOutputData(InferenceEngine::BlobMap &out);
 
     void Infer(InferRequestBase* request = nullptr);
+
+    static std::shared_ptr<Graph> createGraph(const NodePtr& node) {
+        const auto graphName = node->getName() + "_graph";
+        const auto& context = node->getContext();
+        auto _graph = std::make_shared<Graph>(graphName, context);
+
+        //Make inputs
+        for (size_t i = 0, port = 0; i < node->getParentEdges().size(); i++) {
+            if (node->getParentEdgeAt(i)->getParent()->isConstant())
+                continue;
+
+            const auto inputName = node->getName() + "_in_" + std::to_string(port);
+            auto input = std::make_shared<node::Input>(node->getInputShapeAtPort(port),
+                                                       node->getOriginalInputPrecisionAtPort(port),
+                                                       inputName,
+                                                       "Parameter",
+                                                       context);
+            _graph->AddEdge(input, node, port, port);
+            _graph->AddNode(input);
+            _graph->GetInputNodesMap()[input->getName()] = input;
+            _graph->inputs.push_back(input);
+            port++;
+        }
+
+        _graph->AddNode(node);
+
+        for (size_t i = 0, port = 0; i < node->getChildEdges().size(); i++) {
+            if (node->getParentEdgeAt(i)->getParent()->isConstant())
+                continue;
+
+            const auto outputName = node->getName() + "_out_" + std::to_string(port);
+            auto output = std::make_shared<node::Input>(node->getOutputShapeAtPort(port),
+                                                        node->getOriginalOutputPrecisionAtPort(port),
+                                                        outputName,
+                                                        "Result",
+                                                        context);
+
+            _graph->AddEdge(output, node, port, port);
+            _graph->AddNode(output);
+            _graph->GetOutputNodesMap()[output->getName()] = output;
+            _graph->outputs.push_back(output);
+            port++;
+        }
+
+        return _graph;
+    }
+
+    void exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst) override {
+        assert(src.size() == inputs.size());
+        assert(dst.size() == outputs.size());
+
+        for (size_t i = 0; i != src.size(); i++)
+            inputs[i]->getChildEdgeAt(0)->getMemoryPtr()->getMemoryMngr()->setExtBuff(src[i]->getData(), src[i]->getSize());
+
+        for (size_t i = 0; i != dst.size(); i++)
+            outputs[i]->getParentEdgeAt(0)->getMemoryPtr()->getMemoryMngr()->setExtBuff(dst[i]->getData(), src[i]->getSize());
+
+        Infer();
+    }
+
+    void InferShapes() {
+        for (auto& node : executableGraphNodes) {
+            if (node->isDynamicNode()) {
+                node->updateShapes();
+            }
+        }
+    }
 
     const std::vector<NodePtr>& GetNodes() const {
         return graphNodes;
@@ -120,6 +208,132 @@ public:
     void RemoveDroppedNodes();
     void RemoveDroppedEdges();
     void RemoveEdge(EdgePtr& edge);
+    void AddEdge(const NodePtr& parent,
+                 const NodePtr& child,
+                 int parentPort = 0,
+                 int childPort = 0) {
+        auto edge = std::make_shared<Edge>(parent, child, parentPort, childPort);
+        parent->childEdges.push_back(edge);
+        child->parentEdges.push_back(edge);
+        graphEdges.push_back(edge);
+    }
+
+    void AddNode(NodePtr node) {
+        assert(std::find(graphNodes.begin(), graphNodes.end(), node) == graphNodes.end());
+        graphNodes.push_back(node);
+    }
+
+    void AddEdge(EdgePtr edge) {
+        assert(std::find(graphEdges.begin(), graphEdges.end(), edge) == graphEdges.end());
+        graphEdges.push_back(edge);
+    }
+
+    void DropNodeRelaxed(const NodePtr &node) {
+        auto children = node->childEdges;
+        auto parents = node->parentEdges;
+
+        for (size_t i = 0; i < parents.size(); i++) {
+            auto p_edge = parents[i].lock();
+            if (!p_edge) continue;
+            auto parent = p_edge->getParent();
+            if (!parent) continue;
+            if (parent->isConstant()) continue;
+
+            const int inNum = p_edge->getInputNum();
+            p_edge->drop();
+            RemoveEdge(p_edge);
+
+            for (size_t j = 0; j < children.size(); j++) {
+                auto c_edge = children[j].lock();
+                if (!c_edge) continue;
+                auto child = c_edge->getChild();
+                if (!child) continue;
+
+                const int outNum = c_edge->getOutputNum();
+                c_edge->drop();
+                RemoveEdge(c_edge);
+
+                std::cout << "Adding edge between: " << parent->getName() << " and: " << child->getName() << "\n";
+
+                EdgePtr newEdge(new Edge(parent, child, inNum, outNum));
+                graphEdges.push_back(newEdge);
+                parent->addEdge(newEdge);
+            }
+        }
+    }
+
+    void ReplaceNode(const NodePtr &origin, const NodePtr &node) {
+        std::cout << "Replacing node: " << origin->getName() << " with: " << node->getName() << "\n";
+
+        auto children = origin->childEdges;
+        auto parents = origin->parentEdges;
+
+        for (size_t i = 0; i < parents.size(); i++) {
+            auto p_edge = parents[i].lock();
+            if (!p_edge) continue;
+            auto parent = p_edge->getParent();
+            if (!parent) continue;
+            // if (parent->isConstant()) continue;
+
+            const int inNum  = p_edge->getInputNum();
+            const int outNum = p_edge->getOutputNum();
+            // p_edge->drop();
+            RemoveEdge(p_edge);
+            std::cout << "Creatin edge between: " << parent->getName() << " and " << node->getName() << "\n";
+            EdgePtr newEdge(new Edge(parent, node, inNum, outNum));
+            parent->addEdge(newEdge);
+            graphEdges.push_back(newEdge);
+        }
+
+        for (size_t j = 0; j < children.size(); j++) {
+            auto c_edge = children[j].lock();
+            if (!c_edge) continue;
+            auto child = c_edge->getChild();
+            if (!child) continue;
+
+            const int inNum  = c_edge->getInputNum();
+            const int outNum = c_edge->getOutputNum();
+            RemoveEdge(c_edge);
+
+            std::cout << "Creatin edge between: " << child->getName() << " and " << node->getName() << "\n";
+            EdgePtr newEdge(new Edge(node, child, inNum, outNum));
+            child->addEdge(newEdge);
+            graphEdges.push_back(newEdge);
+        }
+
+        auto pos = std::find(std::begin(graphNodes), std::end(graphNodes), origin);
+        if (pos != std::end(graphNodes)) {
+            *pos = node;
+        }
+    }
+
+    void RemoveEdgeNoDrop(const EdgePtr& edge) {
+        auto pos = std::find(std::begin(graphEdges), std::end(graphEdges), edge);
+
+        if (pos != std::end(graphEdges)) {
+            std::cout << "Removing node: " << (*pos)->name() << "\n";
+            graphEdges.erase(pos);
+        }
+    }
+
+    void RemoveNode(const NodePtr& node) {
+        // auto pos = std::remove_if(std::begin(graphNodes), std::end(graphNodes), [&name](const NodePtr& node) {
+        //     return name == node->getName();
+        // });
+        auto pos = std::find(std::begin(graphNodes), std::end(graphNodes), node);
+
+        if (pos != std::end(graphNodes)) {
+            std::cout << "Removing node: " << (*pos)->getName() << "\n";
+            graphNodes.erase(pos);
+        }
+    }
+
+    void SetInputs(std::vector<MemoryDescPtr> memDescs) {
+        for (size_t i = 0; i < memDescs.size(); i++) {
+            inputs[i];
+        }
+    }
+
     void DropNode(const NodePtr& node);
     void DropDWConvNode(const NodePtr& node);
 
@@ -193,6 +407,9 @@ public:
     }
 
     Status getStatus() const {return status;}
+    std::vector<NodePtr> inputs;
+    std::vector<NodePtr> outputs;
+    void InitGraph(bool optimize = true);
 
 protected:
     void VisitNode(NodePtr node, std::vector<NodePtr>& sortedNodes);
@@ -227,7 +444,6 @@ protected:
 
     void Replicate(const InferenceEngine::CNNNetwork &network);
     void Replicate(const std::shared_ptr<const ov::Model> &subgraph);
-    void InitGraph();
     void InitNodes();
     void InitDescriptors();
     void ResolveInplaceDirections();
@@ -241,6 +457,9 @@ protected:
     void CreatePrimitivesAndExecConstants() const;
     void InferStatic(InferRequestBase* request);
     void InferDynamic(InferRequestBase* request);
+    bool SyncNodes();
+    void CleanUpNodes();
+    void RegisterOptimization();
 
     friend class LegacyInferRequest;
     friend class intel_cpu::InferRequest;

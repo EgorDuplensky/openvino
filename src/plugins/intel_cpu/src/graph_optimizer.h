@@ -49,6 +49,7 @@ private:
     void MergeTransposeAndReorder(Graph &graph);
     void reshapeRnnSeq(Graph &graph);
     void RemoveSameConvert(Graph &graph);
+    void detachParentsExcept(Graph& graph, std::shared_ptr<Node> node, EdgePtr edge);
 };
 
 }   // namespace intel_cpu

@@ -238,9 +238,7 @@ void Transpose::execute(dnnl::stream strm) {
         auto dstMemPtr = getChildEdgeAt(0)->getMemoryPtr();
         auto srcMemPtr = getParentEdgeAt(INPUT_DATA_IDX)->getMemoryPtr();
 
-        int MB = srcMemPtr->getStaticDims()[0];
-
-        execPtr->exec({srcMemPtr}, {dstMemPtr}, MB);
+        execPtr->exec({srcMemPtr}, {dstMemPtr});
     } else {
         IE_THROW() << "Could not execute Transpose node. Primitive was not created.";
     }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "cache/multi_cache.h"
 #include "graph_context.h"
 #include "onednn/iml_type_mapper.h"
@@ -60,7 +61,9 @@ public:
         : runtimeCache(graphContext->getParamsCache()),
           scratchPad(graphContext->getScratchPad()),
           engine(graphContext->getEngine()),
-          implPriorities(implPriorities) {}
+          implPriorities(implPriorities),
+          graphContext(graphContext) // @todo tmp, should be avoided
+    {}
 
     MultiCacheWeakPtr getRuntimeCache() const {
         return runtimeCache;
@@ -78,6 +81,10 @@ public:
         return implPriorities;
     }
 
+    const GraphContext::CPtr getGraphContext() const {
+        return graphContext;
+    }
+
 private:
     // weak_ptr is required to avoid cycle dependencies with MultiCache
     // since ExecutorContext is stored in Executor itself
@@ -85,7 +92,10 @@ private:
     DnnlScratchPadPtr scratchPad;
     dnnl::engine engine;
     std::vector<impl_desc_type> implPriorities;
+    const GraphContext::CPtr graphContext;
 };
+
+using ExecutorContextPtr = std::shared_ptr<ExecutorContext>;
 
 class ExecutorFactory {
 public:
@@ -97,6 +107,13 @@ public:
 
 using ExecutorFactoryPtr = std::shared_ptr<ExecutorFactory>;
 using ExecutorFactoryCPtr = std::shared_ptr<const ExecutorFactory>;
+
+class Executor {
+public:
+    virtual void exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst) = 0;
+    virtual ~Executor() = default;
+};
+using ExecutorPtr = std::shared_ptr<Executor>;
 
 }   // namespace intel_cpu
 }   // namespace ov

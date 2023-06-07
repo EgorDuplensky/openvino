@@ -142,6 +142,13 @@ public:
     BroadcastingPolicy getBroadcastingPolicy() const { return broadcastingPolicy; }
 
     static bool isSupportedOperation(const std::shared_ptr<const ngraph::Node>& op, std::string& errorMessage) noexcept;
+    const std::vector<float>& getScales() const {
+        return scales;
+    }
+
+    const std::vector<float>& getShifts() const {
+        return shifts;
+    }
 
 private:
     executorPtr execPtr = nullptr;

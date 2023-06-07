@@ -118,8 +118,9 @@ struct TransposeOptimizedEmitter {
     }
 };
 }   // namespace
-void RefOptimizedTransposeExecutor::exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst, const int MB) {
+void RefOptimizedTransposeExecutor::exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst) {
     const size_t dataSize = src[0]->getDesc().getPrecision().size();
+    const int MB = src[0]->getStaticDims()[0];
     TransposeContext ctx = {src[0], dst[0], MB};
     OV_SWITCH(intel_cpu, TransposeOptimizedEmitter, ctx, dataSize,
               OV_CASE(1u, InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type),

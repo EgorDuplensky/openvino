@@ -18,7 +18,7 @@ public:
               const std::vector<MemoryDescPtr>& srcDescs,
               const std::vector<MemoryDescPtr>& dstDescs,
               const dnnl::primitive_attr &attr) override;
-    void exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst, const int MB) override;
+    void exec(const std::vector<MemoryCPtr>& src, const std::vector<MemoryPtr>& dst) override;
     impl_desc_type getImplType() const override { return implType; }
 private:
     static const impl_desc_type implType = impl_desc_type::acl;

@@ -208,9 +208,7 @@ std::shared_ptr<ngraph::Function> dump_graph_as_ie_ngraph_net(const Graph &graph
 }
 
 #ifdef CPU_DEBUG_CAPS
-void serialize(const Graph &graph) {
-    const std::string& path = graph.getConfig().debugCaps.execGraphPath;
-
+void serialize(const Graph &graph, const std::string& path) {
     if (path.empty())
         return;
 
@@ -220,6 +218,10 @@ void serialize(const Graph &graph) {
         serializeToXML(graph, path);
     else
         IE_THROW() << "Unknown serialize format. Should be either 'cout' or '*.xml'. Got " << path;
+}
+
+void serialize(const Graph &graph) {
+    serialize(graph, graph.getConfig().debugCaps.execGraphPath);
 }
 
 void serializeToXML(const Graph &graph, const std::string& path) {

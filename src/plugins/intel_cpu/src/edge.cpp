@@ -62,7 +62,9 @@ void Edge::drop() {
             list.erase(myself);
     };
 
+    DEBUG_LOG("Dropping edge: ", name(), " from child edges of: ", getParent(), "\n");
     _drop_from(getParent()->childEdges);
+    DEBUG_LOG("Dropping edge: ", name(), " from parent edges of: ", getChild(), "\n");
     _drop_from(getChild()->parentEdges);
 }
 

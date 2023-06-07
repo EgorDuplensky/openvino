@@ -9,8 +9,15 @@
 #include <string>
 #include <vector>
 #include <array>
+#include "graph_aligners.hpp"
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "common/dnnl_executor.h"
+#include "executors/matmul.hpp"
+#include "nodes/executors/executor.hpp"
+#include "nodes/executors/matmul_factory.hpp"
+#include <graph.h>
+#include "graph_aligners.hpp"
+#include "nodes/executors/mvn_list.hpp"
 
 namespace ov {
 namespace intel_cpu {
@@ -20,11 +27,8 @@ class MatMul : public Node {
 public:
     MatMul(const std::shared_ptr<ngraph::Node>& op, const GraphContext::CPtr context);
 
-    void getSupportedDescriptors() override;
-    void createDescriptor(const std::vector<MemoryDescPtr>& inputDesc,
-                          const std::vector<MemoryDescPtr>& outputDesc) override;
+    void getSupportedDescriptors() override {};
     void initSupportedPrimitiveDescriptors() override;
-    MemoryDescPtr getSrcMemDesc(const dnnl::primitive_desc &prim_desc, size_t idx) const override;
     bool canFuse(const NodePtr& node) const override;
     bool created() const override;
 
@@ -37,6 +41,7 @@ public:
         return getOutputShapeAtPort(0).getRank() - 1;
     }
 
+    ExecutorPtr createExecutor() override;
     void prepareParams() override;
     void execute(dnnl::stream strm) override;
     void executeDynamicImpl(dnnl::stream strm) override;
@@ -45,27 +50,37 @@ public:
     const std::vector<impl_desc_type>& getDefaultImplPriority() override;
     bool canBeExecutedInInt8() const override;
 
-protected:
-    AttrPtr initPrimitiveAttr() override;
-    AttrPtr initPrimitiveAttr(const VectorDims& dims);
+    std::vector<std::pair<const std::vector<MemoryDescPtr>, const std::vector<MemoryDescPtr>>>
+    getSupportedMemoryConfigs(const std::vector<InferenceEngine::Precision>& inputPrecisions,
+                              const std::vector<Shape>& inputShapes,
+                              const std::vector<InferenceEngine::Precision>& outputPrecisions,
+                              const std::vector<Shape>& outputShapes) override;
+
+    enum class Feature {
+        fuseMultiply,
+        transposeInput,
+    };
+
+    void requestFeature(const Feature feature) {
+        requestedFeatures.push_back(feature);
+    }
+
+// protected:
+//     AttrPtr initPrimitiveAttr() override;
+//     AttrPtr initPrimitiveAttr(const VectorDims& dims);
 
 private:
-    using executorPtr = std::shared_ptr<DnnlExecutor>;
-    executorPtr execPtr = nullptr;
-    dnnl::memory::desc getBiasDescFrom(const DnnlMemoryDescCPtr outMemDesc);
-    std::pair<Shape, Shape> makeDummyInputShapes(const Shape& in0, const Shape& in1) const;
-
-    bool withBiases;
-
-    void setPostOps(dnnl::primitive_attr &attr, const VectorDims& dims, bool initWeights);
+    // void setPostOps(dnnl::primitive_attr &attr, const VectorDims& dims, bool initWeights);
+    std::vector<InferenceEngine::Precision> inputPrecisions;
+    std::vector<InferenceEngine::Precision> outputPrecisions;
 
     std::string errorPrefix;
-
-    /* whether to transpose input */
-    std::array<bool, 2> transposeIn;
-
-    std::array<DnnlBlockedMemoryDescPtr, 2> inDataDesc;
-    DnnlBlockedMemoryDescPtr outDataDesc;
+    MatMulAttrs matmulAttrs;
+    ExecutorPtr execPtr = nullptr;
+    std::unique_ptr<Graph> execGraph = nullptr;
+    std::vector<Feature> requestedFeatures;
+    MatMulExecutorFactoryPtr factory;
+    ExecutorContextPtr executionContext;
 };
 
 }   // namespace node
