@@ -283,7 +283,12 @@ void FullyConnected::getSupportedDescriptors() {
     // MLAS doesn't support post-ops fusing and only supports FP32. INT8 is not enabled yet
     // Disable MLAS when FC could fuse post-ops
     //TODO: fix MLAS FC on ARM, it crashes on commit f5a20395a5c029c26a21ab9fbf2500232d1ee6c9
-    useMlas = false;
+    // useMlas = false;
+    useMlas = !useSparseWeights &&
+              (inputDataType == memory::data_type::f32 && weightsDataType == memory::data_type::f32) &&
+              fusedWith.empty();
+    if (std::getenv("DISABLE_MLAS")) useMlas = false;
+
     auto wgtDims = getInputShapeAtPort(WEIGHTS_ID).getStaticDims();
     // MLAS cannot find weight dims > 2, e.g. [1,64,9,9] * [10,64,9,9]
     if (useMlas && wgtDims.size() > 2) {
