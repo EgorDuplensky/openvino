@@ -288,6 +288,7 @@ void FullyConnected::getSupportedDescriptors() {
     useMlas = !useSparseWeights &&
               (inputDataType == memory::data_type::f32 && weightsDataType == memory::data_type::f32) &&
               fusedWith.empty();
+    if (std::getenv("DISABLE_MLAS")) useMlas = false;
     auto wgtDims = getInputShapeAtPort(WEIGHTS_ID).getStaticDims();
     // MLAS cannot support weight dims > 2, e.g. [1,64,9,9] * [10,64,9,9]
     if (useMlas && wgtDims.size() > 2) {
