@@ -19,6 +19,8 @@ struct FCAttrs {
     bool withBias = false;
     bool weightsNonTransposed = false;
     bool sparseWeights = false;
+    // @todo combine all the weights related attributes into some WeightsPreprocess structure
+    InputPrepType weightsPrepType = InputPrepType::None;
     uint64_t dynamicQuantizationGroupSize;
 
     ov::intel_cpu::Config::ModelType modelType = ov::intel_cpu::Config::ModelType::Unknown;

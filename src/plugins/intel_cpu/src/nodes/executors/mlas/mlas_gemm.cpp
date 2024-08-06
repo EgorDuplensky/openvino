@@ -15,6 +15,8 @@
 #include "nodes/executors/memory_arguments.hpp"
 #include "nodes/executors/mlas/mlas_gemm.hpp"
 #include "utils/debug_capabilities.h"
+#include "utils/clone_original_blob.h"
+#include "nodes/common/subnormals_to_zero.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -29,7 +31,7 @@ static Dim batchDim(const VectorDims& dims) {
 
 static MemoryPtr prepareWeightMemory(const MemoryPtr weightsMemory,
                                      const ExecutorContext::CPtr context,
-                                     const bool weightsTransposed) {
+                                     const FCAttrs& attrs) {
     DEBUG_LOG("MlasGemmExecutor: prepack weights");
     const auto& wgtDims = weightsMemory->getStaticDims();
     // Weights are transposed by MatMulConstTransposesExtraction
@@ -40,6 +42,8 @@ static MemoryPtr prepareWeightMemory(const MemoryPtr weightsMemory,
 
     auto packedBsize = mlas_sgemm_pack_get_size(N, K);
 
+    const bool weightsTransposed = !attrs.weightsNonTransposed;
+
     auto create = [&]() {
         float* weightPtr = weightsMemory->getDataAs<float>();
         size_t ldb = weightsTransposed ? K : N;
@@ -49,6 +53,12 @@ static MemoryPtr prepareWeightMemory(const MemoryPtr weightsMemory,
         float* prepackedDst = _ptr->getDataAs<float>();
         DEBUG_LOG("MlasGemmExecutor: cache miss, perform packing");
         mlas_sgemm_pack(weightsTransposed ? "T" : "F", N, K, ldb, weightPtr, prepackedDst);
+
+        // @todo can we ommit flushing subnormals in case of down convertion, i.e. FP32 -> FP16?
+        if (attrs.weightsPrepType == InputPrepType::FTZ) {
+            setSubnormalsToZero(prepackedDst, packedBsize / sizeof(float));
+        }
+
         return _ptr;
     };
 
@@ -102,7 +112,7 @@ MlasGemmExecutor::MlasGemmExecutor(const FCAttrs& attrs,
                                    const ExecutorContext::CPtr context)
     : m_attrs(attrs),
       m_memoryArgs(memory),
-      packedWeights(prepareWeightMemory(memory.at(ARG_WEI), context, !attrs.weightsNonTransposed)),
+      packedWeights(prepareWeightMemory(memory.at(ARG_WEI), context, attrs)),
       N(batchDim(memory.at(ARG_WEI)->getStaticDims())),
       K(memory.at(ARG_WEI)->getStaticDims().back())
 {}
