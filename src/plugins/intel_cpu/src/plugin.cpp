@@ -146,52 +146,6 @@ static bool streamsSet(const ov::AnyMap& config) {
     return config.count(ov::num_streams.name());
 }
 
-void Plugin::get_performance_streams(Config& config, const std::shared_ptr<ov::Model>& model) const {
-    int streams_set = config.streams;
-    int streams;
-    if (config.streamsChanged) {
-        streams = streams_set;
-    } else if (config.hintPerfMode == ov::hint::PerformanceMode::LATENCY) {
-        streams = 1;
-    } else if (config.hintPerfMode == ov::hint::PerformanceMode::THROUGHPUT) {
-        streams = 0;
-    } else {
-        streams = streams_set == 1 ? 0 : streams_set;
-    }
-
-    if (!((0 == streams_set) && config.streamsChanged)) {
-        get_num_streams(streams, model, config);
-    } else {
-        config.streamExecutorConfig = IStreamsExecutor::Config{"CPUStreamsExecutor", streams};
-    }
-}
-
-void Plugin::calculate_streams(Config& conf, const std::shared_ptr<ov::Model>& model, bool imported) const {
-    const auto model_prefer_name = std::string("MODEL_PREFER_THREADS");
-    if (imported && model->has_rt_info("intel_cpu_hints_config")) {
-        // load model_prefer_threads from cache
-        int cache_model_prefer;
-        const auto& hints_config = model->get_rt_info<ov::AnyMap>("intel_cpu_hints_config");
-        const auto it_model_prefer = hints_config.find(model_prefer_name);
-        if (it_model_prefer != hints_config.end()) {
-            try {
-                cache_model_prefer = it_model_prefer->second.as<int>();
-            } catch (const ov::Exception&) {
-                OPENVINO_THROW("Cache file doesn't have valid value for " + model_prefer_name);
-            }
-
-            conf.modelPreferThreads = cache_model_prefer;
-        }
-    }
-    get_performance_streams(conf, model);
-    // save model_prefer_threads to model rt_info when loading network
-    if (!imported) {
-        ov::AnyMap hints_props;
-        hints_props.insert({model_prefer_name, std::to_string(conf.modelPreferThreads)});
-        model->set_rt_info(hints_props, "intel_cpu_hints_config");
-    }
-}
-
 static bool shouldEnableLPT(const ov::AnyMap& modelConfig, const Config& engineConfig) {
     const auto& enableLPT = modelConfig.find(ov::intel_cpu::lp_transforms_mode.name());
     if (enableLPT == modelConfig.end())  // model config has higher priority
@@ -301,7 +255,7 @@ std::shared_ptr<ov::ICompiledModel> Plugin::compile_model(const std::shared_ptr<
     transformations.PostLpt();
     transformations.Snippets();
 
-    transformations.CpuSpecificOpSet();
+    transformations.CpuSpecificOpSet(conf.numSubStreams);
 
     DEBUG_LOG(PrintableModel(*cloned_model, "cpu_"));
 
@@ -547,7 +501,7 @@ ov::Any Plugin::get_ro_property(const std::string& name, const ov::AnyMap& optio
 }
 
 ov::SupportedOpsMap Plugin::query_model(const std::shared_ptr<const ov::Model>& model, const ov::AnyMap& config) const {
-    WeightsSharing::Ptr fake_w_cache;
+    std::shared_ptr<SocketsWeights> fake_w_cache = std::make_shared<SocketsWeights>();
 
     if (model == nullptr) {
         OPENVINO_THROW("Only ngraph-based models are supported!");
@@ -572,7 +526,7 @@ ov::SupportedOpsMap Plugin::query_model(const std::shared_ptr<const ov::Model>& 
             transformation.UpToLpt();
             transformation.PostLpt();
             transformation.Snippets();
-            transformation.CpuSpecificOpSet();
+            transformation.CpuSpecificOpSet(conf.numSubStreams);
         },
         [&](const std::shared_ptr<ov::Node>& op) {
             std::unique_ptr<Node> ptr;

@@ -387,8 +387,10 @@ bool StridedSlice::isExecutable() const {
 }
 
 void StridedSlice::createPrimitive() {
-    if (isInPlace())
+    if (isInPlace()) {
+        std::cout << getName() << ": Strided slice is in place" << "\n";
         return;
+    }
 
     if (inputShapesDefined() && isExecutable() && !shapeHasDataDependency) {
         if (needPrepareParams()) {
@@ -427,6 +429,7 @@ bool StridedSlice::needShapeInfer() const {
 
 void StridedSlice::execute(dnnl::stream strm) {
     if (isInPlace()) {
+        std::cout << getName() << " is inplace" << "\n";
         return;
     }
 

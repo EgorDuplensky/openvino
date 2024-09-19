@@ -268,10 +268,19 @@ protected:
      * @params numaId   Numa Id to be used for an execution
      */
     void ExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
+    void UpdateAndExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1);
 
     void InferStatic(SyncInferRequest* request, int numaId);
+    void InferDynamicWithAsyncNew(SyncInferRequest* request, int numaId);
+    void InferDynamicSync(SyncInferRequest* request, int numaId);
+
     template<typename UpdateStrategy>
     void InferDynamic(SyncInferRequest* request, int numaId, UpdateStrategy&& update);
+
+    void CreateDependencyMap();
+    void WaitForControlDependencies(const std::vector<std::vector<size_t>>& m_contolDependencies,
+                                    const NodePtr& node,
+                                    const std::shared_ptr<std::vector<std::atomic<bool>>>& m_waitHandles);
 
     friend class intel_cpu::SyncInferRequest;
     friend std::shared_ptr<ov::Model> dump_graph_as_ie_ngraph_net(const Graph &graph);
@@ -295,8 +304,14 @@ private:
     // these node pointers (from graphNodes) are to avoid regular checking for
     // constantness of nodes in Infer methods and calls of
     // non-executable (optimized out) nodes, such as Input, Reshape, etc.
-    std::vector<NodePtr> m_executableGraphNodes;
+    // std::vector<NodePtr> m_executableGraphNodes;
+    std::vector<std::vector<NodePtr>> m_executableGraphNodes;
     std::vector<size_t> m_executableSyncNodesInds;
+    std::vector<std::vector<size_t>> m_contolDependencies;
+    // use something like unordered_flat_map instead?
+    std::shared_ptr<std::vector<std::atomic<bool>>> m_waitHandles;
+    std::vector<bool> m_waitHandlesUnsafe;
+    std::vector<int> m_subStreamId;
 
     GraphContext::CPtr m_context;
     dnnl::stream m_stream;

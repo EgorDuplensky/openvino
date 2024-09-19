@@ -36,6 +36,7 @@ void ov::descriptor::Input::replace_output(Output& new_output) {
     }
     new_output.add_input(this);
     m_output = &new_output;
+    // m_src_node.reset(new_output.get_node().get());
     m_src_node = std::shared_ptr<ov::Node>(new_output.get_node());
 
     // Output replacement may change the topological order of nodes,

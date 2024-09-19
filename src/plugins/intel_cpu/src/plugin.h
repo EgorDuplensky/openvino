@@ -49,9 +49,6 @@ public:
 private:
     ov::Any get_ro_property(const std::string& name, const ov::AnyMap& options) const;
 
-    void get_performance_streams(Config& config, const std::shared_ptr<ov::Model>& model) const;
-    void calculate_streams(Config& conf, const std::shared_ptr<ov::Model>& model, bool imported = false) const;
-
     Config engConfig;
     /* Explicily configured streams have higher priority than performance hints.
        So track if streams is set explicitly (not auto-configured) */

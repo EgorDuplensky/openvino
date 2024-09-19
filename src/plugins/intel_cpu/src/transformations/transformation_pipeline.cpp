@@ -302,10 +302,10 @@ void Transformations::UpToLpt() {
         Lpt(defaultPrecisions);
 }
 
-void Transformations::CpuSpecificOpSet(void) {
+void Transformations::CpuSpecificOpSet(int numSubStreams) {
     CPU_DEBUG_CAP_TRANSFORMATION_SCOPE(this, Specific);
 
-    ConvertToCPUSpecificOpset(model);
+    ConvertToCPUSpecificOpset(model, numSubStreams);
 }
 
 void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecisions) {

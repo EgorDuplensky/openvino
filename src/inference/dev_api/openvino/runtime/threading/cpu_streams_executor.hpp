@@ -44,6 +44,8 @@ public:
     ~CPUStreamsExecutor() override;
 
     void run(Task task) override;
+    void stop();
+    void wait();
 
     void execute(Task task) override;
 

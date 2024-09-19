@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <iostream>
 #include <string>
 #include "dnnl_types.h"
 #include "dnnl_extension_utils.h"
@@ -684,6 +685,7 @@ void MemoryInput::resolveInPlaceEdges(Edge::LOOK look) {
             " Unexpected inplace resolve call to an allocated edge: ", edge->name());
 
         auto edgeMem = std::make_shared<Memory>(getEngine(), memDesc, memBlock);
+
         edge->reuse(edgeMem);
     }
 }

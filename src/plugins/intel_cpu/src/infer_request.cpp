@@ -108,11 +108,11 @@ void SyncInferRequest::infer() {
     auto message = ov::threading::message_manager();
 
     throw_if_canceled();
-    if (m_asyncRequest->m_has_sub_infers) {
-        sub_streams_infer();
-        message->server_wait();
-        return;
-    }
+    // if (m_asyncRequest->m_has_sub_infers) {
+    //     sub_streams_infer();
+    //     message->server_wait();
+    //     return;
+    // }
 
     convert_batched_tensors();
     if (m_batched_tensors.size() > 0) {

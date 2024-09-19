@@ -30,10 +30,10 @@ public:
                   const std::shared_ptr<SubMemoryManager> sub_memory_manager = nullptr);
 
     ~CompiledModel() {
-        if (m_has_sub_compiled_models) {
-            m_sub_compiled_models.clear();
-            m_sub_memory_manager->_memorys_table.clear();
-        }
+        // if (m_has_sub_compiled_models) {
+        //     m_sub_compiled_models.clear();
+        //     m_sub_memory_manager->_memorys_table.clear();
+        // }
     }
 
     std::shared_ptr<ov::IAsyncInferRequest> create_infer_request() const override;
@@ -77,7 +77,7 @@ private:
     const bool m_loaded_from_cache;
     // WARNING: Do not use m_graphs directly.
     mutable std::deque<GraphGuard> m_graphs;
-    mutable SocketsWeights m_socketWeights;
+    mutable std::shared_ptr<SocketsWeights> m_socketWeights = std::make_shared<SocketsWeights>();
 
     /* WARNING: Use get_graph() function to get access to graph in current stream.
      * NOTE: Main thread is interpreted as master thread of external stream so use this function to get access to graphs
@@ -85,13 +85,14 @@ private:
      */
     GraphGuard::Lock get_graph() const;
 
-    std::vector<std::shared_ptr<CompiledModel>> get_sub_compiled_models() const {
-        return m_sub_compiled_models;
-    }
+    // std::vector<std::shared_ptr<CompiledModel>> get_sub_compiled_models() const {
+    //     return m_sub_compiled_models;
+    // }
 
-    std::vector<std::shared_ptr<CompiledModel>> m_sub_compiled_models;
-    std::shared_ptr<SubMemoryManager> m_sub_memory_manager = nullptr;
+    // std::vector<std::shared_ptr<CompiledModel>> m_sub_compiled_models;
+    // std::shared_ptr<SubMemoryManager> m_sub_memory_manager = nullptr;
     bool m_has_sub_compiled_models = false;
+    std::vector<std::shared_ptr<ov::threading::CPUStreamsExecutor>> m_localStreamExecutors;
 };
 
 }   // namespace intel_cpu

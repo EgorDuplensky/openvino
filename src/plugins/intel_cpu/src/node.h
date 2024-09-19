@@ -483,6 +483,10 @@ public:
         return execIndex;
     }
 
+    int getNumaId() const {
+        return m_numa_id;
+    }
+
     const std::string & getTypeStr() const {
         return typeStr;
     }
@@ -642,6 +646,10 @@ public:
         return keepOriginalPrecision;
     }
 
+    const GraphContext::CPtr getContext() const {
+        return context;
+    }
+
 protected:
     bool canFuseSimpleOperation(const NodePtr& node) const;
 
@@ -667,6 +675,7 @@ protected:
     std::vector <NodePtr> mergedWith;
 
     int curNumaNode = -1;
+    int m_numa_id = 0;
 
     void toNumaNode(int numaID);
     virtual void toNumaNodeImpl(int numaID);

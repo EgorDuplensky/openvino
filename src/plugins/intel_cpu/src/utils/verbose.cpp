@@ -41,7 +41,7 @@ bool Verbose::shouldBePrinted() const {
  * Formating written in C using oneDNN format functions.
  * Can be rewritten in pure C++ if necessary
  */
-void Verbose::printInfo() {
+void Verbose::printInfo(const int numaId) {
     enum Color {
         RED,
         GREEN,
@@ -154,6 +154,7 @@ void Verbose::printInfo() {
 
     stream << "ov_cpu_verbose" << ','
            << "exec" << ','
+           << numaId << ','
            << nodeImplementer << ','
            << nodeName << ":" << nodeType << ":" << nodeAlg << ','
            << nodePrimImplType << ','

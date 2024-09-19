@@ -3,6 +3,7 @@
 //
 
 #include "composite.h"
+#include <future>
 
 #include "nodes/input.h"
 #include "cpu_memory.h"
@@ -22,6 +23,7 @@ Composite::Composite(const std::shared_ptr<ov::Node>& op, const GraphContext::CP
     : Node(op, context, InternalDynShapeInferFactory()) {
     const auto& subModel = ov::as_type_ptr<SubModel>(op);
     OPENVINO_ASSERT(subModel, "Attempt to create SubGraph node from an invalid op type: ", op);
+    m_numa_id = std::getenv("DISABLE_ASYNC") ? 0 : op->get_rt_info()["numa_id"].as<int>();
 
     m_body = subModel->get_function();
 }
@@ -43,7 +45,7 @@ void Composite::selectOptimalPrimitiveDescriptor() {
     }
 
     // configure the inner graph to get the information about output memory descriptors
-    m_graph.Init(m_body, context, graphInputConfig, graphOutputConfig);
+    m_graph.Init(m_body, context->moveToNuma(m_numa_id), graphInputConfig, graphOutputConfig);
 
     // for the output decriptors, use the configuration of the graph's output nodes
     auto outputDescriptors = m_graph.getOutputMemoryDescriptors();
@@ -79,7 +81,11 @@ void Composite::createPrimitive() {
         outputMemory.emplace_back(getDstMemoryAtPort(i));
     }
 
-    m_graph.Activate(inputMemory, outputMemory);
+    const auto& streamExecutors = context->getCPUStreamExecutors();
+    streamExecutors[m_numa_id]->run_and_wait({[this, &inputMemory, &outputMemory]() {
+        m_graph.Activate(inputMemory, outputMemory);
+    }});
+    // m_graph.Activate(inputMemory, outputMemory);
 }
 
 void Composite::execute(dnnl::stream) {

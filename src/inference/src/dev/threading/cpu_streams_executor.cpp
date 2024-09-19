@@ -519,5 +519,22 @@ void CPUStreamsExecutor::run(Task task) {
     }
 }
 
+void CPUStreamsExecutor::stop() {
+    {
+        std::lock_guard<std::mutex> lock(_impl->_mutex);
+        _impl->_isStopped = true;
+    }
+    _impl->_queueCondVar.notify_all();
+}
+// @todo currently ensures that the last task will be executed before exit
+// Need to ensure that all the tasks are finished
+void CPUStreamsExecutor::wait() {
+    for (auto& thread : _impl->_threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+}
+
 }  // namespace threading
 }  // namespace ov

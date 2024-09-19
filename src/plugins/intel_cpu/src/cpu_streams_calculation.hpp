@@ -110,5 +110,9 @@ void get_num_streams(const int streams,
                      const std::shared_ptr<ov::Model>& model,
                      Config& config);
 
+void get_performance_streams(Config& config, const std::shared_ptr<ov::Model>& model);
+
+void calculate_streams(Config& conf, const std::shared_ptr<ov::Model>& model, bool imported = false);
+
 }  // namespace intel_cpu
 }  // namespace ov

@@ -34,7 +34,7 @@ public:
           }
 
     void UpToLpt();
-    void CpuSpecificOpSet();
+    void CpuSpecificOpSet(int numSubStreams);
     void PostLpt();
     void Snippets(void);
 

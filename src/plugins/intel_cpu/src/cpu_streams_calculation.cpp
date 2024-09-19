@@ -687,5 +687,51 @@ void get_num_streams(const int streams, const std::shared_ptr<ov::Model>& model,
     generate_stream_info(streams, -1, model, config, proc_type_table);
 }
 
+void get_performance_streams(Config& config, const std::shared_ptr<ov::Model>& model) {
+    int streams_set = config.streams;
+    int streams;
+    if (config.streamsChanged) {
+        streams = streams_set;
+    } else if (config.hintPerfMode == ov::hint::PerformanceMode::LATENCY) {
+        streams = 1;
+    } else if (config.hintPerfMode == ov::hint::PerformanceMode::THROUGHPUT) {
+        streams = 0;
+    } else {
+        streams = streams_set == 1 ? 0 : streams_set;
+    }
+
+    if (!((0 == streams_set) && config.streamsChanged)) {
+        get_num_streams(streams, model, config);
+    } else {
+        config.streamExecutorConfig = IStreamsExecutor::Config{"CPUStreamsExecutor", streams};
+    }
+}
+
+void calculate_streams(Config& conf, const std::shared_ptr<ov::Model>& model, bool imported) {
+    const auto model_prefer_name = std::string("MODEL_PREFER_THREADS");
+    if (imported && model->has_rt_info("intel_cpu_hints_config")) {
+        // load model_prefer_threads from cache
+        int cache_model_prefer;
+        const auto& hints_config = model->get_rt_info<ov::AnyMap>("intel_cpu_hints_config");
+        const auto it_model_prefer = hints_config.find(model_prefer_name);
+        if (it_model_prefer != hints_config.end()) {
+            try {
+                cache_model_prefer = it_model_prefer->second.as<int>();
+            } catch (const ov::Exception&) {
+                OPENVINO_THROW("Cache file doesn't have valid value for " + model_prefer_name);
+            }
+
+            conf.modelPreferThreads = cache_model_prefer;
+        }
+    }
+    get_performance_streams(conf, model);
+    // save model_prefer_threads to model rt_info when loading network
+    if (!imported) {
+        ov::AnyMap hints_props;
+        hints_props.insert({model_prefer_name, std::to_string(conf.modelPreferThreads)});
+        model->set_rt_info(hints_props, "intel_cpu_hints_config");
+    }
+}
+
 }  // namespace intel_cpu
 }  // namespace ov

@@ -5,6 +5,7 @@
 #include "graph.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -58,6 +59,12 @@ namespace intel_cpu {
 
 Graph::~Graph() {
     CPU_DEBUG_CAP_ENABLE(summary_perf(*this));
+
+    if (m_context->level() == 0) {
+        average_counters(*this); // @todo temporarily moved out of debug caps to be able to collect counter for non-debug-caps builds
+        // CPU_DEBUG_CAP_ENABLE(average_counters(*this));
+        std::cout << "Number of inferences: " << infer_count << "\n";
+    }
 }
 
 template<typename NET>
@@ -270,11 +277,17 @@ static std::vector<size_t> IdentifySyncPoints(const std::vector<NodePtr>& graphN
     return syncNodesInds;
 }
 
-static std::tuple<std::vector<NodePtr>, std::vector<size_t>> ExtractExecutableNodesAndSyncPoints(const std::vector<size_t>& syncNodesInds,
-                                                                                                 const std::vector<NodePtr>& graphNodes) {
+// to be able to execute tensor parallel with duplicated graph even on single socket host
+static bool disableAsync() {
+    static bool disable = std::getenv("DISABLE_ASYNC") ? true : false;
+    return disable;
+}
+
+static std::tuple<std::vector<std::vector<NodePtr>>, std::vector<size_t>> ExtractExecutableNodesAndSyncPoints(const std::vector<size_t>& syncNodesInds,
+                                                                                                              const std::vector<NodePtr>& graphNodes) {
     OV_ITT_SCOPE(FIRST_INFERENCE, itt::domains::intel_cpu_LT, "Graph::ExtractExecutableNodesAndSyncPoints");
     std::unordered_map<size_t, size_t> graphIdToExecutableId;
-    std::vector<NodePtr> executableGraphNodes;
+    std::vector<std::vector<NodePtr>> executableGraphNodes(2);
     for (size_t i = 0; i < graphNodes.size(); i++) {
         const auto& graphNode = graphNodes[i];
         if ((!graphNode->isConstant() && CPU_DEBUG_CAPS_ALWAYS_TRUE(graphNode->isExecutable())) || // non-constant executable or
@@ -285,7 +298,11 @@ static std::tuple<std::vector<NodePtr>, std::vector<size_t>> ExtractExecutableNo
              * we execute a node, which is not ready to be executed
              */
             graphIdToExecutableId[i] = executableGraphNodes.size();
-            executableGraphNodes.emplace_back(graphNode);
+            // std::cout << "Adding node: " << graphNode->getName() << ":" << graphNode->getTypeStr() << ":" << graphNode->getNumaId() << "\n";
+            if (std::getenv("OLD_ASYNC") || disableAsync())
+                executableGraphNodes[0].emplace_back(graphNode);
+            else
+                executableGraphNodes[graphNode->getNumaId()].emplace_back(graphNode);
         }
     }
 
@@ -315,7 +332,7 @@ void Graph::Init(const std::shared_ptr<const ov::Model>& model,
     if (IsReady())
         ForgetGraphData();
 
-    m_context = context;
+    m_context = context->down();
     m_stream = dnnl::stream(getEngine());
 
     Replicate(model, inputConfigs, outputConfigs);
@@ -371,6 +388,8 @@ void Graph::Activate(const std::vector<MemoryPtr>& externalInputMemory,
 
     std::tie(m_executableGraphNodes, m_executableSyncNodesInds) = ExtractExecutableNodesAndSyncPoints(syncNodesInds, graphNodes);
 
+    std::cout << "parallel_get_max_threads(): " << parallel_get_max_threads() << "\n";
+
     status = hasDynNodes ? (parallel_get_max_threads() > 1 ? Status::ReadyDynamic : Status::ReadyDynamicSeq)
         : Status::ReadyStatic;
 
@@ -411,6 +430,7 @@ void Graph::Configure(bool optimize) {
     ResolveComplexInplaceConflicts();
 
     SortTopologically();
+    CreateDependencyMap();
 
     status = Status::Initialized;
 }
@@ -527,6 +547,8 @@ void Graph::CreatePrimitivesAndExecConstants() const {
         {
             OV_ITT_SCOPE(FIRST_INFERENCE, itt::domains::intel_cpu_LT, node->profiling.createPrimitive);
             DEBUG_LOG(*node);
+
+
             node->createPrimitive();
         }
 
@@ -1092,7 +1114,7 @@ VecMemoryDescs Graph::getOutputMemoryDescriptors() const {
 }
 
 void Graph::InferStatic(SyncInferRequest* request, int numaId) {
-    for (const auto& node : m_executableGraphNodes) {
+    for (const auto& node : m_executableGraphNodes[0]) {
         ExecuteNodeWithCatch(node, request, numaId);
     }
 }
@@ -1324,6 +1346,141 @@ inline void Graph::ExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* r
     }
 }
 
+static std::string v(const NodePtr& node) {
+    return node->getName() + ":" + node->getTypeStr() + ":" + std::to_string(node->getExecIndex());
+}
+
+void Graph::CreateDependencyMap() {
+    m_contolDependencies.resize(graphNodes.size());
+    m_waitHandles = std::make_shared<std::vector<std::atomic<bool>>>(graphNodes.size());
+    m_waitHandlesUnsafe.resize(graphNodes.size());
+
+    const auto& nodes = GetNodes();
+    for (size_t i = 0; i < nodes.size(); i++) {
+        const auto& node = nodes[i];
+        const auto numaId = node->getNumaId();
+        for (size_t j = 0; j < node->getParentEdges().size(); j++) {
+            const auto& parent = node->getParentEdgeAt(j)->getParent();
+            const auto parentNumaId = parent->getNumaId();
+
+            if (numaId == parentNumaId)
+                continue;
+
+            if (parent->isExecutable()) {
+                std::cout << "Node: " << v(node) << " depends on: " << v(parent) << "\n";
+                m_contolDependencies[node->getExecIndex()].push_back(parent->getExecIndex());
+            }
+        }
+    }
+}
+
+void Graph::WaitForControlDependencies(const std::vector<std::vector<size_t>>& m_contolDependencies,
+                                       const NodePtr& node,
+                                       const std::shared_ptr<std::vector<std::atomic<bool>>>& m_waitHandles) {
+    const int execIndex = node->getExecIndex();
+    // wait for control dependencies
+    if (!m_contolDependencies[execIndex].empty()) {
+        for (const auto index : m_contolDependencies[execIndex]) {
+            // std::cout << "Node: " << v(node) << " waiting for dependency: " << v(graphNodes[index]) << "\n";
+            // while (!m_waitHandlesUnsafe[index]) {
+            // // while (!(*m_waitHandles)[index].load()) {
+            //     // std::this_thread::sleep_for(std::chrono::nanoseconds(50));
+            //     std::this_thread::yield();
+            // }
+             while (!(*m_waitHandles)[index].load()) {
+                // std::this_thread::sleep_for(std::chrono::nanoseconds(50));
+                std::this_thread::yield();
+            }
+        }
+        // std::cout << "Node: " << v(node) << " all dependencies are ready!" << "\n";
+    }
+}
+
+inline void Graph::UpdateAndExecuteNode(const NodePtr& node, SyncInferRequest* request, int numaId) {
+    if (node->isDynamicNode()) {
+        node->updateShapes();
+        node->updateDynamicParams();
+    }
+
+    ExecuteNodeWithCatch(node, request, numaId);
+}
+
+void Graph::InferDynamicWithAsyncNew(SyncInferRequest* request, int numaId) {
+    std::mutex _msgMutex;
+    std::condition_variable _msgCondVar;
+    std::vector<bool> finished(getGraphContext()->getCPUStreamExecutors().size(), false);
+
+    // std::cout << "Graph: " << GetName() << ". Executing with async new" << "\n";
+
+    // static DurationRAII duration("updateNodes duration: ");
+    // std::cout << "Infering graph: " << GetName() << "using substream: "
+    //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
+
+    // const auto& streamExecutor = m_context->getCPUStreamExecutor();
+
+    /* std::cout << "Current sync numa node id: " << m_context->getCPUStreamExecutor()->get_numa_node_id() << "\n"; */
+
+    const auto& streamExecutors = getGraphContext()->getCPUStreamExecutors();
+    assert(!streamExecutors.empty());
+
+    for (int numaId = 0; numaId < static_cast<int>(streamExecutors.size()); numaId++) {
+        const auto& streamExecutor = streamExecutors[numaId];
+        streamExecutor->run(
+            [this, request, numaId, &_msgMutex, &finished, &_msgCondVar]() {
+                /* std::cout << "Current async numa node id: " << m_context->getCPUStreamExecutor()->get_numa_node_id() << "\n"; */
+                for (const auto& node : m_executableGraphNodes[numaId]) {
+                    // std::cout << "Execute async node: " << node->getName()
+                    //           << " numaid: " << numaId << "\n";
+                    const auto execIndex = node->getExecIndex();
+                    WaitForControlDependencies(m_contolDependencies, node, m_waitHandles);
+                    UpdateAndExecuteNode(node, request, numaId);
+                    // m_waitHandlesUnsafe[execIndex] = true;
+                    (*m_waitHandles)[execIndex] = true;
+                    // std::cout << "Finished async node: " << v(node) << "\n";
+                }
+                {
+                    std::lock_guard<std::mutex> lock(_msgMutex);
+                    finished[numaId] = true;
+                }
+                _msgCondVar.notify_all();
+            });
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(_msgMutex);
+        _msgCondVar.wait(lock, [&] {
+            return std::all_of(finished.begin(), finished.end(), [](const bool state) {
+                return state == true;
+            });
+        });
+    }
+
+    // std::cout << "Async execution finished. Resetting handle states" << "\n";
+
+    for (auto& handle : *m_waitHandles) {
+        handle = false;
+    }
+    //     for (size_t i = 0; i < m_waitHandlesUnsafe.size(); i++) {
+    //         m_waitHandlesUnsafe[i] = false;
+    //     }
+}
+
+void Graph::InferDynamicSync(SyncInferRequest* request, int numaId) {
+    // std::cout << "Graph: " << GetName() << ". Executing with sync" << "\n";
+    // static DurationRAII duration("updateNodes duration: ");
+    // std::cout << "Infering graph: " << GetName() << "using substream: "
+    //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
+    for (const auto& node : m_executableGraphNodes[0]) {
+        if (node->isDynamicNode()) {
+            node->updateShapes();
+            node->updateDynamicParams();
+        }
+        ExecuteNodeWithCatch(node, request, numaId);
+    }
+    // std::cout << "Finished infering graph: " << GetName() << " using substream: "
+    //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
+}
+
 template<typename UpdateStrategy>
 void Graph::InferDynamic(SyncInferRequest* request, int numaId, UpdateStrategy&& update) {
     size_t inferCounter = 0;
@@ -1331,7 +1488,7 @@ void Graph::InferDynamic(SyncInferRequest* request, int numaId, UpdateStrategy&&
         update(stopIndx);
 
         for (; inferCounter < stopIndx; ++inferCounter) {
-            auto& node = m_executableGraphNodes[inferCounter];
+            auto& node = m_executableGraphNodes[0][inferCounter];
 
             ExecuteNodeWithCatch(node, request, numaId);
         }
@@ -1363,10 +1520,22 @@ void Graph::Infer(SyncInferRequest* request) {
 
     switch (status) {
     case Status::ReadyDynamic:
-        InferDynamic(request, numaId, UpdateNodes(m_executableGraphNodes));
+        // InferDynamic(request, numaId, UpdateNodes(m_executableGraphNodes));
+        // break;
+        // @todo decide sync vs async in scope of graph creation
+        if (!m_context->getCPUStreamExecutors().empty() && !disableAsync()) {
+            InferDynamicWithAsyncNew(request, numaId);
+        } else {
+            InferDynamicSync(request, numaId);
+        }
         break;
     case Status::ReadyDynamicSeq:
-        InferDynamic(request, numaId, UpdateNodesSeq(m_executableGraphNodes));
+        if (m_context->level() == 0 && !disableAsync()) {
+            InferDynamicWithAsyncNew(request, numaId);
+        } else {
+            InferDynamicSync(request, numaId);
+            // InferDynamic(request, numaId, UpdateNodesSeq(m_executableGraphNodes[0]));
+        }
         break;
     case Status::ReadyStatic:
         InferStatic(request, numaId);
@@ -1667,25 +1836,27 @@ void Graph::EnforceInferencePrecision() {
                 /* list of node types that must be forced to be executed in BF16 precision
                 * because of performance gains */
                 if (one_of(parent->getType(),
-                        Type::Convolution,    // conv nets
-                        Type::FullyConnected, // conv / bert nets
-                        Type::RNNCell,        // recurent nets
-                        Type::RNNSeq,         // recurent nets
-                        Type::MatMul,         // bert nets
-                        Type::ROIPooling,     // object detection nets
-                        Type::Interpolate,    // super resolution nets
-                        Type::PagedAttention))// page attention
+                           Type::Convolution,    // conv nets
+                           Type::FullyConnected, // conv / bert nets
+                           Type::RNNCell,        // recurent nets
+                           Type::RNNSeq,         // recurent nets
+                           Type::MatMul,         // bert nets
+                           Type::ROIPooling,     // object detection nets
+                           Type::Interpolate,    // super resolution nets
+                           Type::PagedAttention, // page attention
+                           Type::SubModel))      // super resolution nets
                     continue;   // stop at significant nodes
             } else if (inferPrec == ov::element::f16) {
                 /* list of node types that must be forced to be executed in FP16 precision
                 * because of performance gains */
                 if (one_of(parent->getType(),
-                        Type::Convolution,    // conv nets
-                        Type::Deconvolution,  // deconv
-                        Type::FullyConnected, // conv / bert nets
-                        Type::MatMul,         // bert nets
-                        Type::Pooling,
-                        Type::MVN))
+                           Type::Convolution,    // conv nets
+                           Type::Deconvolution,  // deconv
+                           Type::FullyConnected, // conv / bert nets
+                           Type::MatMul,         // bert nets
+                           Type::Pooling,
+                           Type::MVN,
+                           Type::SubModel))
                     continue;   // stop at significant nodes
             }
 

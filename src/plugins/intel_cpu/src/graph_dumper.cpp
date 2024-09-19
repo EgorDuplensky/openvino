@@ -5,6 +5,7 @@
 #include "graph_dumper.h"
 
 #include "dnnl_debug.h"
+#include "nodes/composite.h"
 #include "openvino/pass/manager.hpp"
 #include "openvino/pass/serialize.hpp"
 #include "openvino/runtime/exec_model_info.hpp"
@@ -14,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <fstream>
 
 namespace ov {
 namespace intel_cpu {
@@ -347,5 +349,63 @@ void summary_perf(const Graph &graph) {
 }
 
 #endif
+
+void average_counters(const Graph &graph) {
+    std::ofstream myfile;
+    std::string fileName = std::getenv("AC_FILE") ? std::getenv("AC_FILE") :  graph.GetName() + "_bacr.csv";
+    myfile.open(fileName);
+
+    myfile << "layerName;execStatus;layerType;execType;numaId;realTime (ms);cpuTime (ms);" << "\n";
+
+    uint64_t total_avg = 0;
+    // input_ids;NOT_RUN;Parameter;unknown_i64;0.000;0.000;
+    auto getAvg = [](NodePtr node) {
+        uint64_t avg = node->PerfCounter().avg();
+        return avg;
+    };
+
+    auto printAC = [&myfile](NodePtr node, uint64_t avg, int numaId) {
+        const std::string status = avg > 0 ? "EXECUTED" : "NOT_RUN";
+        const auto cpuTime = std::chrono::microseconds(avg).count() / 1000.0;
+        const auto realTime = cpuTime;
+        myfile << node->getName() << ";"
+               << status << ";"
+               << node->getTypeStr() << ";"
+               << node->getPrimitiveDescriptorType() << ";"
+               << numaId << ";"
+               << realTime << ";"
+               << cpuTime << ";"
+               << "\n";
+    };
+
+    for (auto &node : graph.GetNodes()) {
+        if (node->isConstant())
+            continue;
+
+        if (auto subgraph = std::dynamic_pointer_cast<node::Composite>(node)) {
+            // uint64_t subgraph_avg = getAvg(node);
+            uint64_t inner_total_avg = 0;
+            for (const auto& innerNode : subgraph->graph().GetNodes()) {
+                if (innerNode->isConstant())
+                    continue;
+                printAC(innerNode, getAvg(innerNode), subgraph->getNumaId());
+                inner_total_avg += getAvg(innerNode);
+            }
+
+            uint64_t subgraph_avg = getAvg(subgraph) - inner_total_avg;
+
+            printAC(node, subgraph_avg, subgraph->getNumaId());
+            total_avg += subgraph_avg;
+        } else {
+            printAC(node, getAvg(node), node->getNumaId());
+            total_avg += getAvg(node);
+        }
+    }
+
+    const auto total_ms = std::chrono::microseconds(total_avg).count() / 1000.0;
+    myfile << "Total;;;;" << total_ms << ";" << total_ms << ";" << "\n";
+
+    myfile.close();
+}
 }   // namespace intel_cpu
 }   // namespace ov

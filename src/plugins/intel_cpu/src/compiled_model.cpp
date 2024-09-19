@@ -4,6 +4,7 @@
 
 #include "compiled_model.h"
 #include "async_infer_request.h"
+#include "cpu_streams_calculation.hpp"
 #include "infer_request.h"
 #include "itt.h"
 #include "low_precision/low_precision.hpp"
@@ -22,6 +23,7 @@
 
 #include "cpu/x64/cpu_isa_traits.hpp"
 #include <cstring>
+#include <memory>
 #include <utility>
 
 #if defined(OV_CPU_WITH_ACL)
@@ -51,8 +53,7 @@ CompiledModel::CompiledModel(const std::shared_ptr<ov::Model>& model,
       m_plugin(plugin),
       m_cfg{cfg},
       m_name{model->get_name()},
-      m_loaded_from_cache(loaded_from_cache),
-      m_sub_memory_manager(sub_memory_manager) {
+      m_loaded_from_cache(loaded_from_cache) {
     m_mutex = std::make_shared<std::mutex>();
     const auto& core = m_plugin->get_core();
     if (!core)
@@ -88,6 +89,34 @@ CompiledModel::CompiledModel(const std::shared_ptr<ov::Model>& model,
     std::vector<Task> tasks;
     tasks.resize(streams);
     m_graphs.resize(streams);
+
+    if (m_cfg.numSubStreams > 0) {
+        m_has_sub_compiled_models = true;
+        auto sub_cfg = m_cfg;
+        sub_cfg.numSubStreams = 0;
+        sub_cfg.enableNodeSplit = true;
+        auto streams_info_table = m_cfg.streamExecutorConfig.get_streams_info_table();
+        for (int i = 0; i < m_cfg.numSubStreams; i++) {
+            std::vector<std::vector<int>> sub_streams_table;
+            sub_streams_table.push_back(streams_info_table[i + 1]);
+            sub_streams_table[0][NUMBER_OF_STREAMS] = 1;
+            sub_cfg.streamExecutorConfig = IStreamsExecutor::Config{"CPUStreamsExecutor",
+                                                                    1,
+                                                                    1,
+                                                                    ov::hint::SchedulingCoreType::ANY_CORE,
+                                                                    false,
+                                                                    true,
+                                                                    sub_streams_table,
+                                                                    sub_cfg.streamsRankTable[i]};
+            std::cout << "Substream: " << i << sub_cfg.streamExecutorConfig.get_threads_per_stream() << "\n";
+
+            // calculate_streams(sub_cfg, model);
+            auto streamExecutor = std::dynamic_pointer_cast<ov::threading::CPUStreamsExecutor>(
+                m_plugin->get_executor_manager()->get_idle_cpu_streams_executor(sub_cfg.streamExecutorConfig));
+            m_localStreamExecutors.push_back(streamExecutor);
+        }
+    }
+
     if (executor_confg.get_streams() != 0) {
         auto all_graphs_ready = [&] {
             return std::all_of(m_graphs.begin(), m_graphs.end(), [&](Graph& graph) {
@@ -112,31 +141,31 @@ CompiledModel::CompiledModel(const std::shared_ptr<ov::Model>& model,
     } else {
         CompiledModel::get_graph();
     }
-    if (m_cfg.numSubStreams > 0) {
-        m_has_sub_compiled_models = true;
-        auto sub_cfg = m_cfg;
-        sub_cfg.numSubStreams = 0;
-        sub_cfg.enableNodeSplit = true;
-        auto streams_info_table = m_cfg.streamExecutorConfig.get_streams_info_table();
-        auto message = message_manager();
-        m_sub_memory_manager = std::make_shared<SubMemoryManager>(m_cfg.numSubStreams);
-        message->set_num_sub_streams(m_cfg.numSubStreams);
-        for (int i = 0; i < m_cfg.numSubStreams; i++) {
-            std::vector<std::vector<int>> sub_streams_table;
-            sub_streams_table.push_back(streams_info_table[i + 1]);
-            sub_streams_table[0][NUMBER_OF_STREAMS] = 1;
-            sub_cfg.streamExecutorConfig = IStreamsExecutor::Config{"CPUStreamsExecutor",
-                                                                    1,
-                                                                    1,
-                                                                    ov::hint::SchedulingCoreType::ANY_CORE,
-                                                                    false,
-                                                                    true,
-                                                                    sub_streams_table,
-                                                                    sub_cfg.streamsRankTable[i]};
-            m_sub_compiled_models.push_back(
-                std::make_shared<CompiledModel>(model, plugin, sub_cfg, loaded_from_cache, m_sub_memory_manager));
-        }
-    }
+    // if (m_cfg.numSubStreams > 0) {
+    //     m_has_sub_compiled_models = true;
+    //     auto sub_cfg = m_cfg;
+    //     sub_cfg.numSubStreams = 0;
+    //     sub_cfg.enableNodeSplit = true;
+    //     auto streams_info_table = m_cfg.streamExecutorConfig.get_streams_info_table();
+    //     auto message = message_manager();
+    //     m_sub_memory_manager = std::make_shared<SubMemoryManager>(m_cfg.numSubStreams);
+    //     message->set_num_sub_streams(m_cfg.numSubStreams);
+    //     for (int i = 0; i < m_cfg.numSubStreams; i++) {
+    //         std::vector<std::vector<int>> sub_streams_table;
+    //         sub_streams_table.push_back(streams_info_table[i + 1]);
+    //         sub_streams_table[0][NUMBER_OF_STREAMS] = 1;
+    //         sub_cfg.streamExecutorConfig = IStreamsExecutor::Config{"CPUStreamsExecutor",
+    //                                                                 1,
+    //                                                                 1,
+    //                                                                 ov::hint::SchedulingCoreType::ANY_CORE,
+    //                                                                 false,
+    //                                                                 true,
+    //                                                                 sub_streams_table,
+    //                                                                 sub_cfg.streamsRankTable[i]};
+    //         m_sub_compiled_models.push_back(
+    //             std::make_shared<CompiledModel>(model, plugin, sub_cfg, loaded_from_cache, m_sub_memory_manager));
+    //     }
+    // }
 }
 
 CompiledModel::GraphGuard::Lock CompiledModel::get_graph() const {
@@ -159,10 +188,10 @@ CompiledModel::GraphGuard::Lock CompiledModel::get_graph() const {
                                            ov::pass::low_precision::LowPrecision::isFunctionQuantized(m_model);
 
                     ctx = std::make_shared<GraphContext>(m_cfg,
-                                                         m_socketWeights[socketId],
+                                                         m_socketWeights,
                                                          isQuantizedFlag,
-                                                         streamsExecutor,
-                                                         m_sub_memory_manager);
+                                                         std::dynamic_pointer_cast<ov::threading::CPUStreamsExecutor>(streamsExecutor),
+                                                         m_localStreamExecutors);
                 }
                 const std::shared_ptr<const ov::Model> model = m_model;
                 graphLock._graph.CreateGraph(model, ctx);
@@ -193,14 +222,14 @@ std::shared_ptr<ov::IAsyncInferRequest> CompiledModel::create_infer_request() co
         std::make_shared<AsyncInferRequest>(std::static_pointer_cast<SyncInferRequest>(internal_request),
                                             get_task_executor(),
                                             get_callback_executor());
-    if (m_has_sub_compiled_models) {
-        std::vector<std::shared_ptr<IAsyncInferRequest>> requests;
-        for (auto model : m_sub_compiled_models) {
-            requests.push_back(model->create_infer_request());
-        }
-        async_infer_request->setSubInferRequest(requests);
-        async_infer_request->setSubInfer(true);
-    }
+    // if (m_has_sub_compiled_models) {
+    //     std::vector<std::shared_ptr<IAsyncInferRequest>> requests;
+    //     for (auto model : m_sub_compiled_models) {
+    //         requests.push_back(model->create_infer_request());
+    //     }
+    //     async_infer_request->setSubInferRequest(requests);
+    //     async_infer_request->setSubInfer(true);
+    // }
     return async_infer_request;
 }
 

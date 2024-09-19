@@ -3,7 +3,6 @@
 //
 
 #include "config.h"
-
 #include "cpu/x64/cpu_isa_traits.hpp"
 #include "openvino/core/parallel.hpp"
 #include "openvino/core/type/element_type_traits.hpp"

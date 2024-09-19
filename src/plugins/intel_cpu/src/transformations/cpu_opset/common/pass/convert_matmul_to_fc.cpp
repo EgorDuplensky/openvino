@@ -158,6 +158,8 @@ ov::intel_cpu::ConvertMatMulToFC::ConvertMatMulToFC() {
         auto bias_ph = std::make_shared<ov::op::internal::Placeholder>();
         new_ops.push_back(bias_ph);
 
+        std::cout << "ConvertMatMulToFC: " << "\n";
+
         auto fc = std::make_shared<ov::op::internal::FullyConnected>(fc_input_a,
                                                                      fc_input_b,
                                                                      bias_ph,
