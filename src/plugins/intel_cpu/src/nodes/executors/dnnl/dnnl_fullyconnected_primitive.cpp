@@ -312,6 +312,11 @@ static dnnl::inner_product_forward::primitive_desc createDescriptorInternal(cons
         useSparseWeights ? dnnl::memory::desc().sparse_desc(normalizedWeightDesc.get_dims(), wdt)
                          : dnnl::memory::desc(normalizedWeightDesc.get_dims(), wdt, memory::format_tag::any);
 
+    // std::cout << normalizedInputDesc << "\n";
+    // std::cout << weightsDesc << "\n";
+    // std::cout << biasDesc << "\n";
+    // std::cout << normalizedOutputDesc << "\n";
+
     return dnnl::inner_product_forward::primitive_desc(engine,
                                                        dnnl::prop_kind::forward_inference,
                                                        normalizedInputDesc,

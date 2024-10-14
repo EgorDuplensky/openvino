@@ -83,7 +83,7 @@ void Memory::create(MemoryDescPtr desc, const void* data, bool pads_zeroing) {
     if (nullptr != data) {
         m_blockHandle->setExtBuff(const_cast<void*>(data), memSize);
     } else {
-        m_blockHandle->resize(memSize);
+        m_blockHandle->resize(memSize, m_pMemDesc->getShape());
     }
 }
 
@@ -172,7 +172,7 @@ void MemoryBlockWithReuse::setExtBuff(void *ptr, size_t size) {
     m_data = decltype(m_data)(ptr, release);
 }
 
-bool MemoryBlockWithReuse::resize(size_t size) {
+bool MemoryBlockWithReuse::resize(size_t size, const Shape& shape) {
     constexpr int cacheLineSize = 64;
     bool sizeChanged = false;
     if (size > m_memUpperBound) {
@@ -229,7 +229,7 @@ StringMemory::StringMemory(const dnnl::engine& engine, const MemoryDescPtr& desc
         auto not_const_data = const_cast<void *>(data);
         m_memoryBlock->setExtBuff(reinterpret_cast<OvString *>(not_const_data), string_size);
     } else {
-        m_memoryBlock->resize(string_size);
+        m_memoryBlock->resize(string_size, m_mem_desc->getShape());
     }
 }
 
@@ -255,7 +255,7 @@ void StringMemory::redefineDesc(MemoryDescPtr desc) {
 
     m_mem_desc = desc;
     const auto string_size = m_mem_desc->getShape().getElementsCount();
-    m_memoryBlock->resize(string_size);
+    m_memoryBlock->resize(string_size, m_mem_desc->getShape());
 }
 
 void StringMemory::nullify() {
@@ -291,7 +291,7 @@ StringMemory::OvString* StringMemory::StringMemoryBlock::getStringPtr() const no
     return m_data.get();
 }
 
-bool StringMemory::StringMemoryBlock::resize(size_t size) {
+bool StringMemory::StringMemoryBlock::resize(size_t size, const Shape& shape) {
     bool sizeChanged = false;
     if (size > m_str_upper_bound) {
         if (size > PTRDIFF_MAX) {
@@ -337,8 +337,8 @@ void DnnlMemoryBlock::setExtBuff(void *ptr, size_t size) {
     notifyUpdate();
 }
 
-bool DnnlMemoryBlock::resize(size_t size) {
-    bool sizeChanged = m_pMemBlock->resize(size);
+bool DnnlMemoryBlock::resize(size_t size, const Shape& shape) {
+    bool sizeChanged = m_pMemBlock->resize(size, shape);
     if (sizeChanged) {
         notifyUpdate();
     }
@@ -458,7 +458,7 @@ void StaticMemory::nullify() {
 }
 
 StaticMemory::StaticMemoryBlock::StaticMemoryBlock(size_t size) : m_size(size) {
-    memBlockImpl.resize(m_size);
+    memBlockImpl.resize(m_size, {});
 }
 
 StaticMemory::StaticMemoryBlock::StaticMemoryBlock(void* data, size_t size) : m_size(size) {
@@ -473,7 +473,7 @@ void StaticMemory::StaticMemoryBlock::setExtBuff(void* ptr, size_t size) {
     OPENVINO_THROW("Unexpected: StaticMemoryBlock may not be modified");
 }
 
-bool StaticMemory::StaticMemoryBlock::resize(size_t size) {
+bool StaticMemory::StaticMemoryBlock::resize(size_t size, const Shape& shape) {
     if (size != m_size) {
         OPENVINO_THROW("Unexpected: StaticMemoryBlock may not resize the memory");
     }

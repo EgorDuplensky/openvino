@@ -74,6 +74,11 @@ std::string BlockedMemoryDesc::serializeFormat() const {
         result << blkDims[i] << char(startLetter + order[i]);
     }
 
+    // const auto& strides = getStrides();
+    // for (const auto stride : strides) {
+    //     result << "x" << stride;
+    // }
+
     return result.str();
 }
 

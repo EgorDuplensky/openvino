@@ -4,6 +4,7 @@
 
 #include "memory_desc/cpu_memory_desc_utils.h"
 
+#include "cpu_types.h"
 #include "memory_desc/cpu_blocked_memory_desc.h"
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "graph_context.h"
@@ -24,9 +25,11 @@ namespace intel_cpu {
 DnnlMemoryDescPtr MemoryDescUtils::convertToDnnlMemoryDesc(const MemoryDescPtr &desc) {
     if (MemoryDescType::Blocked == desc->getType()) {
         const auto cpuDesc = desc->as<CpuBlockedMemoryDesc>();
-        return std::shared_ptr<DnnlBlockedMemoryDesc>(new DnnlBlockedMemoryDesc(cpuDesc->getPrecision(), cpuDesc->getShape(), cpuDesc->getBlockDims(),
-                                                        cpuDesc->getOrder(), cpuDesc->getOffsetPadding(),
-                                                        cpuDesc->getOffsetPaddingToData(), cpuDesc->getStrides()));
+        return std::shared_ptr<DnnlBlockedMemoryDesc>(
+            new DnnlBlockedMemoryDesc(cpuDesc->getPrecision(), cpuDesc->getShape(), cpuDesc->getBlockDims(),
+                                      cpuDesc->getOrder(), cpuDesc->getOffsetPadding(),
+                                      cpuDesc->getOffsetPaddingToData(),
+                                      cpuDesc->getShape().hasZeroDims() ? VectorDims(cpuDesc->getStrides().size(), 0) : cpuDesc->getStrides()));
     } else if (MemoryDescType::Empty == desc->getType()) {
         return DnnlExtensionUtils::makeDescriptor(dnnl::memory::desc());
     } else if (MemoryDescType::Dnnl & desc->getType()) {
@@ -42,7 +45,8 @@ DnnlBlockedMemoryDesc MemoryDescUtils::convertToDnnlBlockedMemoryDesc(const Memo
     } else if (MemoryDescType::Blocked == desc.getType()) {
         const auto cpuDesc = desc.as<CpuBlockedMemoryDesc>();
         return DnnlBlockedMemoryDesc(cpuDesc->getPrecision(), cpuDesc->getShape(), cpuDesc->getBlockDims(), cpuDesc->getOrder(), cpuDesc->getOffsetPadding(),
-                                     cpuDesc->getOffsetPaddingToData(), cpuDesc->getStrides());
+                                     cpuDesc->getOffsetPaddingToData(),
+                                     cpuDesc->getShape().hasZeroDims() ? VectorDims(cpuDesc->getStrides().size(), 0) : cpuDesc->getStrides());
     } else {
         OPENVINO_THROW("Cannot convert MemoryDesc to DnnlBlockedMemoryDesc");
     }

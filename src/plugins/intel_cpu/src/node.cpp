@@ -162,8 +162,18 @@ Node::Node(const std::shared_ptr<ov::Node>& op,
     if (it != rtInfo.end()) {
         enforceBF16evenForGraphTail = it->second.as<bool>();
     }
+
+    if (op->get_friendly_name() == "__module.model.layers.0.self_attn.rotary_emb/aten::matmul/MatMul_clone_0") {
+        std::cout << op->get_friendly_name() << "\n";
+    }
+
     if (ov::fp16_compression_is_disabled(op))
         keepOriginalPrecision = true;
+
+    m_numa_id = context->numaId();
+    if (!std::getenv("DISABLE_ASYNC")) {
+        m_numa_id = op->get_rt_info().count("numa_id") ? op->get_rt_info()["numa_id"].as<int>() : m_numa_id;
+    }
 }
 
 Node::Node(const std::string& type,
@@ -567,7 +577,7 @@ static void fetchRawMemory(const MemoryPtr& mem) {
     }
     auto block = mem->getMemoryBlock();
     if (mem->isDefined()) {
-        block->resize(mem->getSize());
+        block->resize(mem->getSize(), mem->getShape());
     }
 }
 
@@ -692,6 +702,7 @@ void Node::redefineOutputMemory(const size_t port, const VectorDims& new_output_
 
     const bool has_zero_dims = std::count(std::begin(new_shape), std::end(new_shape), 0lu) > 0;
     const auto mem_desc = getBaseMemDescAtOutputPort(port)->cloneWithNewDims(new_shape, has_zero_dims);
+
     for (size_t j = 0lu; j < edges.size(); j++) {
         edges[j]->getMemoryPtr()->redefineDesc(mem_desc);
     }

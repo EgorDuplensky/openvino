@@ -65,6 +65,8 @@ public:
 
         /** Box identifier, unique for each box. Will be used to querying calculated offset. */
         int64_t id;
+
+        int numaId;
     };
 
     /** @brief Performes inplace normalization of the input boxes
@@ -79,9 +81,10 @@ public:
                 box.finish = max_ts;
 
         // sort by start and finish ts
-        std::sort(boxes.begin(), boxes.end(), [](const Box& l, const Box& r) -> bool {
-            return l.start < r.start || (l.start == r.start && l.finish < r.finish);
-        });
+        std::sort(boxes.begin(), boxes.end(),
+                  [](const Box& l, const Box& r) -> bool {
+                      return l.start < r.start || (l.start == r.start && l.finish < r.finish);
+                  });
 
         // remove unused timestamps (not a begin of some box)
         // each ts should start a box
@@ -104,8 +107,10 @@ public:
                 if (!ts_exist[ts_f++])
                     rm_ts_f++;
 
+            std::cout << "Old box: " << b.id << "[" << b.start << " - " << b.finish << "]" << ", ";
             b.start -= rm_ts_s;
             b.finish -= rm_ts_f;
+            std::cout << "New box: " << b.id << "[" << b.start << " - " << b.finish << "]" << "\n";
         }
         return ts_f - rm_ts_f;
     }

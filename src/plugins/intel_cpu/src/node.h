@@ -501,6 +501,10 @@ public:
         return execIndex;
     }
 
+    void setNumaId(int numaId) {
+        m_numa_id = numaId;
+    }
+
     int getNumaId() const {
         return m_numa_id;
     }

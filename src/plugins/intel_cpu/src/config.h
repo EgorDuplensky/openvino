@@ -73,9 +73,10 @@ struct Config {
     bool enableCpuPinning = true;
     bool changedCpuPinning = false;
     ov::hint::SchedulingCoreType schedulingCoreType = ov::hint::SchedulingCoreType::ANY_CORE;
-    std::set<ov::hint::ModelDistributionPolicy> modelDistributionPolicy = std::getenv("NO_TENSOR_PARALLEL") ?
-        std::set<ov::hint::ModelDistributionPolicy>{}
-        : std::set<ov::hint::ModelDistributionPolicy>{ov::hint::ModelDistributionPolicy::TENSOR_PARALLEL};
+    // std::set<ov::hint::ModelDistributionPolicy> modelDistributionPolicy = {};
+    std::set<ov::hint::ModelDistributionPolicy> modelDistributionPolicy = std::getenv("TENSOR_PARALLEL") ?
+        std::set<ov::hint::ModelDistributionPolicy>{ov::hint::ModelDistributionPolicy::TENSOR_PARALLEL}
+        : std::set<ov::hint::ModelDistributionPolicy>{};
     int streamsRankLevel = 1;
     int numSubStreams = 0;
     bool enableNodeSplit = false;

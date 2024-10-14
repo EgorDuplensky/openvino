@@ -58,13 +58,21 @@ public:
      * @param size - new memory size in bytes
      * @return status whether the memory reallocation was performed
      */
-    virtual bool resize(size_t size) = 0;
+    virtual bool resize(size_t size, const Shape& shape) = 0;
+    virtual bool resize_safe(size_t size, const Shape& shape) {
+        // return false;
+        std::lock_guard<std::mutex> quard(mutex);
+        return resize(size, shape);
+    }
 
     /**
      * @brief Check if the object has control over underlying memory buffer
      * @return status whether the object has control over underlying memory buffer
      */
     virtual bool hasExtBuffer() const noexcept = 0;
+
+private:
+    std::mutex mutex;
 };
 
 /**
@@ -75,7 +83,12 @@ public:
     MemoryBlockWithReuse(int numa_node = -1) : m_data(nullptr, release), numa_node(numa_node) {}
     void* getRawPtr() const noexcept override;
     void setExtBuff(void* ptr, size_t size) override;
-    bool resize(size_t size) override;
+    bool resize(size_t size, const Shape& shape) override;
+    // bool resize_safe(size_t size) override {
+    //     std::lock_guard<std::mutex> quard(mutex);
+    //     return resize(size);
+    // }
+
     bool hasExtBuffer() const noexcept override;
     void free();
 
@@ -103,7 +116,7 @@ public:
     explicit DnnlMemoryBlock(std::unique_ptr<IMemoryBlock> memBlock) : m_pMemBlock(std::move(memBlock)) {}
     void* getRawPtr() const noexcept override;
     void setExtBuff(void* ptr, size_t size) override;
-    bool resize(size_t size) override;
+    bool resize(size_t size, const Shape& shape) override;
     bool hasExtBuffer() const noexcept override;
     void registerMemory(Memory* memPtr) override;
     void unregisterMemory(Memory* memPtr) override;
@@ -230,7 +243,7 @@ public:
         StaticMemoryBlock(void* data, size_t size);
         void* getRawPtr() const noexcept override;
         void setExtBuff(void* ptr, size_t size) override;
-        bool resize(size_t size) override;
+        bool resize(size_t size, const Shape& shape) override;
         bool hasExtBuffer() const noexcept override;
         void registerMemory(Memory* memPtr) override;
         void unregisterMemory(Memory* memPtr) override;
@@ -376,7 +389,7 @@ public:
         void setExtBuff(OvString* ptr, size_t size);
         size_t getStrLen() const noexcept;
         void* getRawPtr() const noexcept;
-        bool resize(size_t size /* string elements number */);
+        bool resize(size_t size /* string elements number */, const Shape& shape);
         bool hasExtBuffer() const noexcept;
 
     private:

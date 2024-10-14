@@ -39,8 +39,8 @@ enum MemoryDescType {
 };
 
 enum class LayoutType : unsigned {
-    nspc,      // general per channels format
     ncsp,      // general planar
+    nspc,      // general per channels format
     nCsp8c,    // general channels blocked by 8
     nCsp16c    // general channels blocked by 16
 };

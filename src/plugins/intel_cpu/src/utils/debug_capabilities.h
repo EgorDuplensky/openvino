@@ -121,6 +121,7 @@ std::ostream & operator<<(std::ostream & os, const dnnl::memory::data_type dtype
 std::ostream & operator<<(std::ostream & os, const dnnl::memory::format_tag dtype);
 std::ostream & operator<<(std::ostream & os, const dnnl::primitive_attr& attr);
 std::ostream & operator<<(std::ostream & os, const dnnl::algorithm& alg);
+std::ostream & operator<<(std::ostream & os, const VectorDims& dims);
 
 void print_dnnl_memory(const dnnl::memory& memory, const size_t size, const int id, const char* message = "");
 

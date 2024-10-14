@@ -29,7 +29,7 @@ public:
         void setExtBuff(void* ptr, size_t size) override {
             // pass
         }
-        bool resize(size_t size) override {
+        bool resize(size_t size, const Shape& shape) override {
             // pass
             return false;
         }
@@ -438,6 +438,10 @@ void MemoryInputBase::initSupportedPrimitiveDescriptors() {
         config.inConfs.push_back(std::move(inPortConfig));
     }
 
+    if (config.inConfs[0].getMemDesc())
+        std::cout << getName() << " Input shape: " << shape.toString()
+                  << " -> " << config.inConfs[0].getMemDesc()->getShape().toString() << "\n";
+
     PortConfig outPortConfig;
 
     outPortConfig.inPlace(0);
@@ -754,7 +758,7 @@ void MemoryInputSDPA::initSupportedPrimitiveDescriptors() {
         PortConfig inPortConfig;
         inPortConfig.inPlace(-1);
         inPortConfig.constant(false);
-        inPortConfig.setMemDesc(descCreators.at(LayoutType::ncsp)->createSharedDesc(precision, shape));
+        inPortConfig.setMemDesc(descCreators.at(LayoutType::ncsp)->createSharedDesc(precision, inputShapes[0]));
         config.inConfs.push_back(std::move(inPortConfig));
     }
 
@@ -765,6 +769,14 @@ void MemoryInputSDPA::initSupportedPrimitiveDescriptors() {
     outPortConfig.setMemDesc(descCreators.at(LayoutType::ncsp)->createSharedDesc(precision, shape));
     config.outConfs.push_back(std::move(outPortConfig));
     supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown);
+
+    if (config.inConfs[0].getMemDesc())
+        std::cout << getName() << " Input shape: " << shape.toString()
+                  << " -> " << config.inConfs[0].getMemDesc()->getShape().toString() << "\n";
+
+    if (!inputShapes.empty()) {
+        std::cout << getName() << " Real input shape: " << inputShapes[0].toString() << "\n";
+    }
 }
 
 void MemoryInputSDPA::initOptimalPrimitiveDescriptor() {

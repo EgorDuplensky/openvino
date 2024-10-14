@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstddef>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -17,7 +18,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <atomic>
 
+#include "cpu_tensor.h"
 #include "cpu_types.h"
 #include "edge.h"
 #include "graph_context.h"
@@ -25,6 +28,7 @@
 #include "graph_optimizer.h"
 #include "infer_request.h"
 #include "itt.h"
+#include "memory_control.hpp"
 #include "memory_desc/cpu_memory_desc_utils.h"
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "node.h"
@@ -61,11 +65,17 @@ using namespace dnnl;
 namespace ov {
 namespace intel_cpu {
 
+static std::string v(const NodePtr& node) {
+    return node->getName() + ":" + node->getTypeStr() + ":" + std::to_string(node->getExecIndex());
+}
+
 Graph::~Graph() {
     CPU_DEBUG_CAP_ENABLE(summary_perf(*this));
 
-    if (m_context->level() == 0) {
-        average_counters(*this); // @todo temporarily moved out of debug caps to be able to collect counter for non-debug-caps builds
+    if (m_context->level() == 0 &&
+        one_of(status, Graph::Status::ReadyDynamic, Graph::Status::ReadyStatic, Graph::Status::ReadyDynamicSeq)) {
+        average_counters(*this);  // @todo temporarily moved out of debug caps to be able to collect counter for
+                                  // non-debug-caps builds
         // CPU_DEBUG_CAP_ENABLE(average_counters(*this));
         std::cout << "Number of inferences: " << infer_count << "\n";
     }
@@ -76,6 +86,12 @@ void Graph::CreateGraph(NET &model, const GraphContext::CPtr context) {
     OV_ITT_SCOPE(FIRST_INFERENCE, itt::domains::intel_cpu_LT, "CreateGraph");
 
     Init(model, context);
+
+    std::cout << "GraphNodes order: " << "\n";
+    for (const auto& node : graphNodes) {
+        std::cout << v(node) << "->";
+    }
+    std::cout << "END" << "\n";
 
     Activate();
 }
@@ -287,8 +303,14 @@ static bool disableAsync() {
     return disable;
 }
 
+static bool seqSync() {
+    static bool seq = std::getenv("SEQ_SYNC") ? true : false;
+    return seq;
+}
+
 static std::tuple<std::vector<std::vector<NodePtr>>, std::vector<size_t>> ExtractExecutableNodesAndSyncPoints(const std::vector<size_t>& syncNodesInds,
-                                                                                                              const std::vector<NodePtr>& graphNodes) {
+                                                                                                              const std::vector<NodePtr>& graphNodes,
+                                                                                                              size_t numNumaNodes) {
     OV_ITT_SCOPE(FIRST_INFERENCE, itt::domains::intel_cpu_LT, "Graph::ExtractExecutableNodesAndSyncPoints");
     std::unordered_map<size_t, size_t> graphIdToExecutableId;
     std::vector<std::vector<NodePtr>> executableGraphNodes(2);
@@ -301,9 +323,9 @@ static std::tuple<std::vector<std::vector<NodePtr>>, std::vector<size_t>> Extrac
              * With current way it is possible that with debug_caps enabled
              * we execute a node, which is not ready to be executed
              */
-            graphIdToExecutableId[i] = executableGraphNodes.size();
+            graphIdToExecutableId[i] = executableGraphNodes[0].size();
             // std::cout << "Adding node: " << graphNode->getName() << ":" << graphNode->getTypeStr() << ":" << graphNode->getNumaId() << "\n";
-            if (std::getenv("OLD_ASYNC") || disableAsync())
+            if (numNumaNodes == 1 || std::getenv("OLD_ASYNC") || disableAsync() || std::getenv("SYNC_ASYNC"))
                 executableGraphNodes[0].emplace_back(graphNode);
             else
                 executableGraphNodes[graphNode->getNumaId()].emplace_back(graphNode);
@@ -321,7 +343,7 @@ static std::tuple<std::vector<std::vector<NodePtr>>, std::vector<size_t>> Extrac
             uniqueExecutableSyncNodesInds.insert(it->second + 1);
         }
     }
-    uniqueExecutableSyncNodesInds.insert(executableGraphNodes.size());
+    uniqueExecutableSyncNodesInds.insert(executableGraphNodes[0].size());
     // convert to a vector to reduce runtime overhead
     std::vector<size_t> executableSyncNodesInds(uniqueExecutableSyncNodesInds.begin(), uniqueExecutableSyncNodesInds.end());
 
@@ -371,7 +393,7 @@ static void UseExternalOutputMemory(const std::map<std::size_t, NodePtr>& output
 }
 
 void Graph::Activate(const std::vector<MemoryPtr>& externalInputMemory,
-                               const std::vector<MemoryPtr>& externalOutputMemory) {
+                     const std::vector<MemoryPtr>& externalOutputMemory) {
     OPENVINO_ASSERT(status == Status::Initialized, "Invalid graph status");
 
     const bool hasDynNodes = ProcessDynNodes();
@@ -389,8 +411,8 @@ void Graph::Activate(const std::vector<MemoryPtr>& externalInputMemory,
         graphNode->cleanup();
     }
 #endif
-
-    std::tie(m_executableGraphNodes, m_executableSyncNodesInds) = ExtractExecutableNodesAndSyncPoints(syncNodesInds, graphNodes);
+    std::tie(m_executableGraphNodes, m_executableSyncNodesInds) = ExtractExecutableNodesAndSyncPoints(
+        syncNodesInds, graphNodes, std::max(std::size_t{1}, m_context->getCPUStreamExecutors().size()));
 
     std::cout << "parallel_get_max_threads(): " << parallel_get_max_threads() << "\n";
 
@@ -433,6 +455,8 @@ void Graph::Configure(bool optimize) {
 
     ResolveComplexInplaceConflicts();
 
+    SortTopologically();
+    // if (!std::getenv("DISABLE_CLONE_POSTPONE"))
     PreProcessConstantInputs();
 
     SortTopologically();
@@ -606,11 +630,11 @@ static bool isReorderAvailable(const MemoryDescPtr& parentDesc, const MemoryDesc
     return dnnl_success == status;
 }
 
-void Graph::insertReorder(EdgePtr& edge, bool isOptimized, std::unordered_set<std::string>& uniqueLayerNames) {
+void Graph::insertReorder(EdgePtr& edge, bool isOptimized, std::unordered_set<std::string>& uniqueLayerNames, const std::string& reason) {
     std::string basicLayerName = edge->getParent()->getName() + "_" +
                                     node::Reorder::getReorderArgs(edge->getInputDesc(), edge->getOutputDesc()) + "_" +
                                     edge->getChild()->getName();
-    std::string layerName = basicLayerName;
+    std::string layerName = basicLayerName + "_" + reason;
     int idx = 0;
     while (uniqueLayerNames.find(layerName) != uniqueLayerNames.end()) {
         idx++;
@@ -618,8 +642,12 @@ void Graph::insertReorder(EdgePtr& edge, bool isOptimized, std::unordered_set<st
     }
     uniqueLayerNames.insert(layerName);
 
+    const auto numaId = edge->numa();
     // optimized flag indicate that just desc update w/o actual physical memory movement.
-    InsertReorder(edge, layerName, edge->getInputDesc(), edge->getOutputDesc(), isOptimized);
+    auto reorder = InsertReorder(edge, layerName, edge->getInputDesc(), edge->getOutputDesc(), isOptimized);
+    (void) numaId;
+    if (!std::getenv("SYNC_REORDERS"))
+        reorder->setNumaId(numaId);
 }
 
 void Graph::insertConvert(EdgePtr& edge) {
@@ -655,6 +683,11 @@ void Graph::ResolveEdgeConflicts() {
        So use a plain for loop, to handle newly inserted edges as well */
     for (size_t i = 0; i < graphEdges.size(); i++) {
         auto& edge = graphEdges[i];
+
+        if (edge->getParent()->getName() == "Broadcast_155402") {
+            std::cout << edge->getParent()->getName() << "\n";
+        }
+
         auto reorderStatus = edge->needReorder();
         DEBUG_LOG(*edge, " reorderStatus = ", reorderStatus);
 
@@ -668,12 +701,12 @@ void Graph::ResolveEdgeConflicts() {
                 // just insert convert. If layout reorder is still needed, it will be inserted later in the traverse
                 insertConvert(edge);
             } else {
-                insertReorder(edge, false, uniqueLayerNames);
+                insertReorder(edge, false, uniqueLayerNames, "ec");
             }
             break;
         }
         case Edge::ReorderStatus::Optimized:
-            insertReorder(edge, true, uniqueLayerNames);
+            insertReorder(edge, true, uniqueLayerNames, "eco");
             break;
         case Edge::ReorderStatus::No:
             break;
@@ -724,7 +757,7 @@ void Graph::ResolveComplexInplaceConflicts() {
     for (ptrdiff_t i = 0; i < numberOfEdges; i++) {
         auto edge = graphEdges[i];
         if (needReorder(edge)) {
-            insertReorder(edge, false, uniqueLayerNames);
+            insertReorder(edge, false, uniqueLayerNames, "cip");
             updateEdge(i);
         }
     }
@@ -816,12 +849,14 @@ void Graph::AllocateWithReuse(const std::vector<size_t>& syncNodesInds) {
                             0,
                             0,
                             static_cast<int64_t>(i),
+                            0,
                             MemoryRegion::RegionType::VARIABLE,
                             MemoryRegion::AllocType::UNKNOWN};
 
         int64_t boxSize = 0;
         bool isConst = false, isOutput = false, isInput = false;
         for (auto &edge : edge_clusters[i]) {
+            reg.numaId = edge->getChild()->getNumaId();
             int e_start = edge->getParent()->getExecIndex();
             int e_finish = edge->getChild()->getExecIndex();
 
@@ -899,14 +934,36 @@ void Graph::AllocateWithReuse(const std::vector<size_t>& syncNodesInds) {
 
     memoryRegions.erase(it, memoryRegions.end());
 
+    if (m_context->level() == 0) {
+        std::cout << "Memory regions: "
+                  << "\n";
+        for (const auto& memoryRegion : memoryRegions) {
+            std::cout << memoryRegion.typeStr() << ":" << memoryRegion.id << "[" << memoryRegion.start << " - " << memoryRegion.finish << "]"
+                      << " size: " << memoryRegion.size << " numa: " << memoryRegion.numaId << "\n";
+        }
+    }
+
     //Set up the memory control subsystem.
     this->m_pMemoryControl = &(getGraphContext()->getNetworkMemoryControl()->createMemoryControlUnit(syncNodesInds));
     auto memoryBlocks = m_pMemoryControl->insert(memoryRegions);
 
+    if (m_context->level() == 0) {
+        std::cout << "Actually allocated memory regions: " << "\n";
+    }
     // attach all the not yet allocated edges to the memory contol
     for (auto&& item : memoryBlocks) {
         int count = 0;
         for (auto&& edge : edge_clusters[item.first]) {
+            if (m_context->level() == 0) {
+                auto edgeClusterId = item.first;
+                auto& memoryRegion = memoryRegions[edgeClusterId];
+                std::cout << item.first << "[" << memoryRegion.start << " - " << memoryRegion.finish << "]"
+                          << " size: " << memoryRegion.size << " numa: " << memoryRegion.numaId
+                          << " edge: " << edge->name() << " "
+                          << (edge->getStatus() == Edge::Status::NeedAllocation ?
+                              std::string("Need allocation") : std::to_string(static_cast<int>(edge->getStatus()))) << "\n";
+            }
+
             if (edge->getStatus() == Edge::Status::NeedAllocation) {
                 edge->allocate(item.second);
 
@@ -919,7 +976,7 @@ void Graph::AllocateWithReuse(const std::vector<size_t>& syncNodesInds) {
                 count++;
             }
         }
-        OPENVINO_ASSERT(count == 1);
+        // OPENVINO_ASSERT(count == 1);
     }
 
     m_pMemoryControl->allocateMemory();
@@ -976,7 +1033,7 @@ void Graph::Allocate(const std::vector<size_t>& syncNodesInds) {
     // resolve edges. Define which will be a view on others
     //   NeedAllocation - real blob
     //   NotAllocated - view on other blob, peer or in-place
-    for (auto& edge : graphEdges) edge->init();
+    for (auto& edge : graphEdges) edge->init(m_context->level());
 
     // Allocate memory space for all edges marked with NeedAllocation
     AllocateWithReuse(syncNodesInds);
@@ -1028,6 +1085,7 @@ void Graph::PreProcessConstantInputs() {
         InputPrepType prepType = requiresPreProcessing(*inputMemory, m_context, getEngine());
 
         if (prepType == InputPrepType::None) {
+            // std::cout << node->getName() << ": does not require preprocessing" << "\n";
             return {};
         }
 
@@ -1035,13 +1093,17 @@ void Graph::PreProcessConstantInputs() {
 
         if (isInPlace && oneShotCopyPossible && !std::getenv("DISABLE_CLONE_POSTPONE")) {
             // clone will be done by a node
+            // std::cout << node->getName() << ": preprocessing will be done by a node" << "\n";
             return ov::optional<InputPrepType>(prepType);
         }
 
         if (!isInPlace && prepType == InputPrepType::PutToNumaLocalCache && !std::getenv("DISABLE_CLONE_POSTPONE")) {
             // no need for numa local copy, since current constant path is not inplace, so it will produce a new blob anyway
+            // std::cout << node->getName() << ": numa local copy can be avoided" << "\n";
             return {};
         }
+
+        // std::cout << node->getName() << ": perform clone" << "\n";
 
         auto blobKey = [](std::shared_ptr<node::Input> input) {
             const auto memory = input->getMemoryPtr();
@@ -1075,6 +1137,7 @@ void Graph::PreProcessConstantInputs() {
 
             bool oneShotCopyPossible = node->canPrepInput(i);
             if (auto postponePreProcessing = visitConstantPath(parent, true, oneShotCopyPossible)) {
+                // std::cout << "Postpone preprocessing for a node: " << v(node) << "\n";
                 const auto preprocessing = *postponePreProcessing;
                 node->prepInput(i, preprocessing);
             }
@@ -1131,7 +1194,9 @@ void Graph::PullOutputData(std::unordered_map<std::size_t, ov::SoPtr<ITensor>>& 
                         "The CPU plugin graph doesn't contain output node with output_index: ",
                         output_index);
         const auto ext_blob = ext_blob_map->second;
+
         auto expected_desc_ptr = MemoryDescUtils::generateCpuBlockedMemoryDesc(ext_blob);
+
         const auto actualDesc = intr_blob.getDescWithType<BlockedMemoryDesc>();
 
         DEBUG_LOG(output_index, ", tensor data addr ", static_cast<void*>(output[output_index]->data()));
@@ -1154,6 +1219,7 @@ void Graph::PullOutputData(std::unordered_map<std::size_t, ov::SoPtr<ITensor>>& 
             " dims ", PartialShape(output[output_index]->get_shape()), " -> ", PartialShape(outDims),
             ", intr ptr ", intr_blob.getData(), " , parentedge's memory object ", parentEdge->getMemoryPtr().get());
             ext_blob->set_shape(outDims);
+
             DEBUG_LOG(output_index, ", tensor data addr ", static_cast<void*>(output[output_index]->data()),
             " dims ", PartialShape(output[output_index]->get_shape()), ", intr ptr ", intr_blob.getData());
             expected_desc_ptr = MemoryDescUtils::generateCpuBlockedMemoryDesc(ext_blob);
@@ -1441,14 +1507,30 @@ inline void Graph::ExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* r
     }
 }
 
-static std::string v(const NodePtr& node) {
-    return node->getName() + ":" + node->getTypeStr() + ":" + std::to_string(node->getExecIndex());
+inline void Graph::UpdateAndExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const {
+    VERBOSE_PERF_DUMP_ITT_DEBUG_LOG(itt::domains::intel_cpu, node, getConfig());
+
+    if (node->isDynamicNode()) {
+        node->updateShapes();
+        node->updateDynamicParams();
+    }
+
+    // VERBOSE_PERF_DUMP_ITT_DEBUG_LOG(itt::domains::intel_cpu, node, getConfig());
+
+    try {
+        ExecuteNode(node, request, numaId);
+    } catch (const std::exception& exp) {
+        OPENVINO_THROW(*node, exp.what());
+    }
 }
 
 void Graph::CreateDependencyMap() {
     m_contolDependencies.resize(graphNodes.size());
     m_waitHandles = std::make_shared<std::vector<std::atomic<bool>>>(graphNodes.size());
-    m_waitHandlesUnsafe.resize(graphNodes.size());
+
+    for (auto& handle : *m_waitHandles) {
+        handle.store(false);
+    }
 
     const auto& nodes = GetNodes();
     for (size_t i = 0; i < nodes.size(); i++) {
@@ -1506,58 +1588,74 @@ void Graph::InferDynamicWithAsyncNew(SyncInferRequest* request, int numaId) {
     std::vector<bool> finished(getGraphContext()->getCPUStreamExecutors().size(), false);
 
     // std::cout << "Graph: " << GetName() << ". Executing with async new" << "\n";
-
     // static DurationRAII duration("updateNodes duration: ");
     // std::cout << "Infering graph: " << GetName() << "using substream: "
     //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
-
     // const auto& streamExecutor = m_context->getCPUStreamExecutor();
-
     /* std::cout << "Current sync numa node id: " << m_context->getCPUStreamExecutor()->get_numa_node_id() << "\n"; */
 
     const auto& streamExecutors = getGraphContext()->getCPUStreamExecutors();
     assert(!streamExecutors.empty());
 
-    for (int numaId = 0; numaId < static_cast<int>(streamExecutors.size()); numaId++) {
+    if (std::getenv("SYNC_ASYNC")) {
+        numaId = 0;
         const auto& streamExecutor = streamExecutors[numaId];
+        streamExecutor->run_and_wait({[this, request, numaId]() {
+            /* std::cout << "Current async numa node id: " << m_context->getCPUStreamExecutor()->get_numa_node_id()
+             * << "\n"; */
+            for (const auto& node : m_executableGraphNodes[numaId]) {
+                // std::cout << "Execute async node: " << v(node) << " numaid: " << numaId
+                //           << " threadId: " << std::this_thread::get_id() << "\n";
+                const auto execIndex = node->getExecIndex();
+                WaitForControlDependencies(m_contolDependencies, node, m_waitHandles);
+                UpdateAndExecuteNode(node, request, numaId);
+                // m_waitHandlesUnsafe[execIndex] = true;
+                (*m_waitHandles)[execIndex] = true;
+                // std::cout << "Finished async node: " << v(node) << " numaId: " << numaId
+                //           << " threadId: " << std::this_thread::get_id() << "\n";
+            }
+        }});
+        return;
+    }
+
+    for (int streamExecutorId = 0; streamExecutorId < static_cast<int>(streamExecutors.size()); streamExecutorId++) {
+        const auto& streamExecutor = streamExecutors[streamExecutorId];
+        const auto numaId = streamExecutor->get_numa_node_id();
         streamExecutor->run(
-            [this, request, numaId, &_msgMutex, &finished, &_msgCondVar]() {
+            [this, request, streamExecutorId, numaId, &_msgMutex, &finished, &_msgCondVar]() {
                 /* std::cout << "Current async numa node id: " << m_context->getCPUStreamExecutor()->get_numa_node_id() << "\n"; */
-                for (const auto& node : m_executableGraphNodes[numaId]) {
-                    // std::cout << "Execute async node: " << node->getName()
-                    //           << " numaid: " << numaId << "\n";
+                for (const auto& node : m_executableGraphNodes[streamExecutorId]) {
+                    // std::cout << "Execute async node: " << v(node)
+                    //           << " numaid: " << numaId << " threadId: " << std::this_thread::get_id() << "\n";
                     const auto execIndex = node->getExecIndex();
                     WaitForControlDependencies(m_contolDependencies, node, m_waitHandles);
                     UpdateAndExecuteNode(node, request, numaId);
                     // m_waitHandlesUnsafe[execIndex] = true;
                     (*m_waitHandles)[execIndex] = true;
-                    // std::cout << "Finished async node: " << v(node) << "\n";
+                    // std::cout << "Finished async node: " << v(node) << " numaId: " << numaId
+                    //           << " threadId: " << std::this_thread::get_id() << "\n";
                 }
-                {
-                    std::lock_guard<std::mutex> lock(_msgMutex);
-                    finished[numaId] = true;
-                }
+
+                std::lock_guard<std::mutex> lock(_msgMutex);
+                finished[streamExecutorId] = true;
                 _msgCondVar.notify_all();
             });
     }
 
-    {
-        std::unique_lock<std::mutex> lock(_msgMutex);
-        _msgCondVar.wait(lock, [&] {
-            return std::all_of(finished.begin(), finished.end(), [](const bool state) {
-                return state == true;
-            });
+    // std::cout << "Waiting for the substreams to finish ..." << "\n";
+
+    std::unique_lock<std::mutex> lock(_msgMutex);
+    _msgCondVar.wait(lock, [&] {
+        return std::all_of(finished.begin(), finished.end(), [](const bool state) {
+            return state == true;
         });
-    }
+    });
 
     // std::cout << "Async execution finished. Resetting handle states" << "\n";
 
     for (auto& handle : *m_waitHandles) {
         handle = false;
     }
-    //     for (size_t i = 0; i < m_waitHandlesUnsafe.size(); i++) {
-    //         m_waitHandlesUnsafe[i] = false;
-    //     }
 }
 
 void Graph::InferDynamicSync(SyncInferRequest* request, int numaId) {
@@ -1565,12 +1663,19 @@ void Graph::InferDynamicSync(SyncInferRequest* request, int numaId) {
     // static DurationRAII duration("updateNodes duration: ");
     // std::cout << "Infering graph: " << GetName() << "using substream: "
     //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
+    // numaId = m_context->numaId();
     for (const auto& node : m_executableGraphNodes[0]) {
-        if (node->isDynamicNode()) {
-            node->updateShapes();
-            node->updateDynamicParams();
-        }
-        ExecuteNodeWithCatch(node, request, numaId);
+        // std::cout << "Execute sync node: " << v(node)
+        //           << " numaid: " << numaId
+        //           << " threadId: " << std::this_thread::get_id()
+        //           << "\n";
+
+        // if (node->isDynamicNode()) {
+        //     node->updateShapes();
+        //     node->updateDynamicParams();
+        // }
+        // ExecuteNodeWithCatch(node, request, numaId);
+        UpdateAndExecuteNodeWithCatch(node, request, numaId);
     }
     // std::cout << "Finished infering graph: " << GetName() << " using substream: "
     //           << m_context->getNumaId() << ":" << m_context->getSubStreamToUse() << "\n";
@@ -1621,7 +1726,11 @@ void Graph::Infer(SyncInferRequest* request) {
         if (!m_context->getCPUStreamExecutors().empty() && !disableAsync()) {
             InferDynamicWithAsyncNew(request, numaId);
         } else {
-            InferDynamicSync(request, numaId);
+            if (seqSync()) {
+                InferDynamicSync(request, numaId);
+            } else {
+                InferDynamic(request, numaId, UpdateNodes(m_executableGraphNodes[0]));
+            }
         }
         break;
     case Status::ReadyDynamicSeq:
@@ -1661,9 +1770,26 @@ void Graph::SortTopologically() {
             if (node->execIndex >= 0)
                 return; // already visited
 
-            for (size_t i = 0; i < node->getParentEdges().size(); i++) {
-                visit(node->getParentEdgeAt(i)->getParent());
+            auto parentEdges = node->getParentEdges();
+
+            if (node->getType() == Type::Concatenation &&
+                std::all_of(parentEdges.begin(), parentEdges.end(),
+                            [](EdgeWeakPtr& edge) {
+                                return edge.lock()->getParent()->getType() == Type::Reorder;
+                            })) {
+                std::sort(parentEdges.begin(), parentEdges.end(),
+                          [&node](EdgeWeakPtr& lhs, EdgeWeakPtr& rhs) {
+                              const auto grandParent = lhs.lock()->getParent()->getParentEdgeAt(0)->getParent();
+                              return grandParent->getNumaId() == node->getNumaId();
+                          });
             }
+
+            for (size_t i = 0; i < parentEdges.size(); i++) {
+                visit(parentEdges[i].lock()->getParent());
+            }
+            // for (size_t i = 0; i < node->getParentEdges().size(); i++) {
+            //     visit(node->getParentEdgeAt(i)->getParent());
+            // }
 
             sorted.push_back(node);
             node->execIndex = ++execIndexCnt;
@@ -1956,6 +2082,7 @@ void Graph::EnforceInferencePrecision() {
             }
 
             const auto res = skipNodes.insert(parent);
+            DEBUG_LOG("EIP: skipping node: ", v(parent));
 
             if (res.second) // node not visited yet
                 searchForNodesToSkip(parent, skipNodes);
@@ -1979,7 +2106,9 @@ void Graph::EnforceInferencePrecision() {
     // always force precision (by ignoring the skip logic) for certain cases
     auto ignoreSkip = [](const NodePtr& node, const GraphContext::CPtr context) {
         // this is an inner graph
-        if (context->level() > 0) { return true; }
+        if (std::getenv("ENFORCE_SUBGRAPHS")) {
+            if (context->level() > 0) { return true; }
+        }
         // precision is forced for the node
         if (node->enforceBF16evenForGraphTail) { return true; }
 
@@ -1987,6 +2116,11 @@ void Graph::EnforceInferencePrecision() {
     };
 
     for (const auto& node : graphNodes) {
+        if (node->getName() == "__module.model.layers.0.self_attn.rotary_emb/aten::matmul/MatMul" ||
+            node->getName() == "__module.model.layers.0.self_attn.rotary_emb/aten::matmul/MatMul_clone_0") {
+            std::cout << "EnforceInferencePrecision: checking node: " << v(node) << "\n";
+        }
+
         if (nodesToSkip.count(node) && !ignoreSkip(node, getGraphContext()))
             continue;
 
@@ -2000,7 +2134,7 @@ void Graph::EnforceInferencePrecision() {
 #endif
 
         for (size_t i = 0; i < node->getOriginalInputsNumber(); i++) {
-            auto keepOriginalInputPrecisionAtPort = [](const NodePtr& node, const size_t inPort) {
+            auto keepOriginalInputPrecisionAtPort = [inferPrec](const NodePtr& node, const size_t inPort) {
                 // keep non-float32 precisions
                 if (node->getOriginalInputPrecisionAtPort(inPort) != ov::element::f32)
                     return true;
@@ -2017,7 +2151,9 @@ void Graph::EnforceInferencePrecision() {
                     node->getType() != Type::Concatenation)
                     return true;
                 // Eltwise and Subgraph (snippets) nodes support precision conversion
-                if (parent->getType() == Type::Input && one_of(node->getType(), Type::Eltwise, Type::Subgraph))
+                if (parent->getType() == Type::Input &&
+                    parent->getOriginalOutputPrecisionAtPort(0) != inferPrec &&
+                    one_of(node->getType(), Type::Eltwise, Type::Subgraph))
                     return true;
 
                 // exclude Convert after Range since it may cause precision loss when integter type to LP.
@@ -2028,8 +2164,9 @@ void Graph::EnforceInferencePrecision() {
                 return false;
             };
 
-            if (keepOriginalInputPrecisionAtPort(node, i))
+            if (keepOriginalInputPrecisionAtPort(node, i)) {
                 continue;
+            }
 
             DEBUG_LOG("#",
                       node->getExecIndex(),

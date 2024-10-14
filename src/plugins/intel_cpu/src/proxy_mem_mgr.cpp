@@ -24,7 +24,7 @@ void ProxyMemoryBlock::setMemBlockResize(std::shared_ptr<IMemoryBlock> pBlock) {
     }
 
     m_pMemBlock = pBlock;
-    m_pMemBlock->resize(m_size);
+    m_pMemBlock->resize(m_size, Shape{});
     notifyUpdate();
 }
 
@@ -38,7 +38,7 @@ void ProxyMemoryBlock::reset() {
     }
 
     m_pMemBlock = m_pOrigBlock;
-    m_pMemBlock->resize(m_size);
+    m_pMemBlock->resize(m_size, {});
     notifyUpdate();
 }
 
@@ -51,8 +51,8 @@ void ProxyMemoryBlock::setExtBuff(void* ptr, size_t size) {
     notifyUpdate();
 }
 
-bool ProxyMemoryBlock::resize(size_t size) {
-    auto res = m_pMemBlock->resize(size);
+bool ProxyMemoryBlock::resize(size_t size, const Shape& shape) {
+    auto res = m_pMemBlock->resize(size, shape);
     DEBUG_LOG(this, ", ", m_pMemBlock, " size ", m_size, " -> ", size, " resized? ", res, " RawPtr ", getRawPtr());
     m_size = size;
     notifyUpdate();

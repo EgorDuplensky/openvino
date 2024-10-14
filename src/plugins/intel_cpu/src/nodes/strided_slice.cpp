@@ -230,8 +230,10 @@ bool StridedSlice::canBeOptimizedInplace() const {
      */
     int slice_idx = attrs.begin.size();
     for (int i = attrs.begin.size() - 1;  i >= 0; i--) {
-        if (attrs.end[i] == static_cast<int>(outputShapes[0].getDims()[i]) &&
+        // if (attrs.end[i] == static_cast<int>(outputShapes[0].getDims()[i]) &&
+        if (attrs.end[i] == static_cast<int>(inputShapes[0].getDims()[i]) &&
             attrs.begin[i] == 0) {
+            slice_idx = i;
             continue;
         }
 
@@ -275,6 +277,7 @@ void StridedSlice::initSupportedPrimitiveDescriptors() {
     config.outConfs[0].inPlace(isOptimizedOut ? 0 : -1);
 
     std::vector<LayoutType> supportedTypes;
+    supportedTypes.push_back(LayoutType::ncsp);
     if (nDims > 2 && attrs.equalDims) {
         auto canUseBlocked = [&](StridedSliceAttributes& tmpAttrs, const size_t blockSize) {
             if (!isConstantInput[BEGIN_ID])
@@ -299,7 +302,6 @@ void StridedSlice::initSupportedPrimitiveDescriptors() {
                 supportedTypes.push_back(LayoutType::nCsp16c);
         }
     }
-    supportedTypes.push_back(LayoutType::ncsp);
     auto creators = BlockedDescCreator::getCommonCreators();
     auto range = BlockedDescCreator::makeFilteredRange(creators, nDims, supportedTypes);
 
@@ -430,6 +432,11 @@ bool StridedSlice::needShapeInfer() const {
 void StridedSlice::execute(dnnl::stream strm) {
     if (isInPlace()) {
         std::cout << getName() << " is inplace" << "\n";
+        return;
+    }
+
+    if (isConstant() && !isInPlace()) {
+        std::cout << getName() << "Constant StridedSlice IS NOT inplace" << "\n";
         return;
     }
 

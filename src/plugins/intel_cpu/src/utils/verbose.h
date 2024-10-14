@@ -23,13 +23,13 @@ public:
           colorUp(atoi(_lvl.c_str()) / 10) {
         if (!shouldBePrinted())
             return;
-        printInfo(numaId);
     }
 
     ~Verbose() {
         if (!shouldBePrinted())
             return;
 
+        printInfo(node->getNumaId());
         printDuration();
         flush();
     }

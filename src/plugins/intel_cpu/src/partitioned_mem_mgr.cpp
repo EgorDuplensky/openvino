@@ -14,9 +14,9 @@ void PartitionedMemoryBlock::setExtBuff(void* ptr, size_t size) {
     m_pBlock->setExtBuff(ptr, size);
 }
 
-bool PartitionedMemoryBlock::resize(size_t size) {
+bool PartitionedMemoryBlock::resize(size_t size, const Shape& shape) {
     m_size = size;
-    return m_pBlock->resize(m_size * m_total_chunks / m_size_chunks);
+    return m_pBlock->resize(m_size * m_total_chunks / m_size_chunks, shape);
 }
 
 bool PartitionedMemoryBlock::hasExtBuffer() const noexcept {

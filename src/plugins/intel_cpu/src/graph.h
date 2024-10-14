@@ -224,7 +224,7 @@ protected:
 
     // For dumping purposes. -1 - no counting, all other positive
     // values mean increment it within each Infer() call
-    int infer_count = -1;
+    int infer_count = 0;
 
     std::vector<NodePtr> graphNodes;
     std::vector<EdgePtr> graphEdges;
@@ -271,6 +271,7 @@ protected:
      */
     void ExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
     void UpdateAndExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1);
+    void UpdateAndExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const;
 
     void InferStatic(SyncInferRequest* request, int numaId);
     void InferDynamicWithAsyncNew(SyncInferRequest* request, int numaId);
@@ -293,7 +294,10 @@ private:
 private:
     void EnforceInferencePrecision();
     void EnforceBF16();
-    void insertReorder(EdgePtr& edge, bool isOptimized, std::unordered_set<std::string>& uniqueLayerNames);
+    void insertReorder(EdgePtr& edge,
+                       bool isOptimized,
+                       std::unordered_set<std::string>& uniqueLayerNames,
+                       const std::string& reason);
     void insertConvert(EdgePtr& edge);
 
 private:

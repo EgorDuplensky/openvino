@@ -3,10 +3,14 @@
 //
 
 #include "reorder.h"
+#include <iostream>
 #include <memory>
 #include <string>
 #include <dnnl_types.h>
 #include <dnnl_extension_utils.h>
+#include "memory_desc/cpu_memory_desc.h"
+#include "memory_desc/cpu_memory_desc_utils.h"
+#include "memory_desc/cpu_blocked_memory_desc.h"
 #include "openvino/core/parallel.hpp"
 #include "utils/general_utils.h"
 #include <cpu/x64/cpu_isa_traits.hpp>
@@ -76,6 +80,15 @@ void Reorder::initSupportedPrimitiveDescriptors() {
     if (input && output) {
         config.inConfs[0].setMemDesc(input);
         config.outConfs[0].setMemDesc(output);
+        auto blockedDesc = MemoryDescUtils::convertToBlockedMemoryDesc(output);
+        if (blockedDesc->hasLayoutType(LayoutType::ncsp) &&
+            getOriginalInputPrecisionAtPort(0) == getOriginalOutputPrecisionAtPort(0) &&
+            blockedDesc->getShape().getRank() > 1 &&
+            blockedDesc->getShape().getDims().back() != *(blockedDesc->getStrides().rbegin() + 1) &&
+            !std::getenv("DISABLE_CUSTOM_REORDER")) {
+            std::cout << "last dim: " << blockedDesc->getShape().getDims().back() << " stride: " << *(blockedDesc->getStrides().rbegin() + 1) << "\n";
+            stridedCase = true;
+        }
     } else if (parent->getSelectedPrimitiveDescriptor() != nullptr &&
                child->getSelectedPrimitiveDescriptor() != nullptr) {
         config.inConfs[0].setMemDesc(parent->getSelectedPrimitiveDescriptor()->getConfig().outConfs[0].getMemDesc());
@@ -183,8 +196,17 @@ void Reorder::prepareParams() {
     if (isOptimized)
         return;
 
+    if (stridedCase)
+        return;
+
     auto srcMemPtr = getSrcMemoryAtPort(0);
     auto dstMemPtr = getDstMemoryAtPort(0);
+
+    // std::cout << "Reorder: " << getName()
+    //           << " src mem: " << srcMemPtr.get() << " src data: " << srcMemPtr->getData()
+    //           << " dst mem: " << dstMemPtr.get() << " dst data: " << dstMemPtr->getData()
+    //           << "\n";
+
     if (!dstMemPtr || !dstMemPtr->isDefined())
         THROW_CPU_NODE_ERR("has undefined destination memory object.");
     if (!srcMemPtr || !srcMemPtr->isDefined())
@@ -302,7 +324,7 @@ void Reorder::createReorderPrimitive(const DnnlMemoryDescPtr& srcDesc, const Dnn
 
     DEBUG_LOG("CreateReorderPrimitive is called for node", getName(), " src desc: ", src_desc, " dst_desc: ", dst_desc);
     CPU_NODE_ASSERT(src_desc.get_ndims() == dst_desc.get_ndims(), "OneDNN doesn't support reorder with different ranks.");
-    auto result = getReorderPrim(context->getParamsCache(), getEngine(), src_desc, dst_desc);
+    auto result = getReorderPrim(context->getParamsCache(m_numa_id), getEngine(), src_desc, dst_desc);
     CPU_NODE_ASSERT(result, "could not create reorder primitive: unsupported reorder case.");
     prim = result;
 
@@ -365,6 +387,51 @@ void Reorder::optimizedNcsp2Nspc() {
     });
 }
 
+void Reorder::optimizedStridedTP() {
+    // std::cout << "!!! Strided reorder: " << getName()  << "\n";
+
+    const auto& srcMem = getSrcMemoryAtPort(0);
+    const auto& dstMem = getDstMemoryAtPort(0);
+    const auto& dstBlockedDesc = MemoryDescUtils::convertToBlockedMemoryDesc(dstMem->getDescPtr());
+
+    const auto precision = dstMem->getPrecision();
+    // const auto& offsetPadding = dstBlockedDesc->getOffsetPaddingToData();
+    // const auto channelOffset = offsetPadding.back();
+    const size_t unloop = 8;
+    const size_t count = dstMem->getShape().getElementsCount() / dstMem->getShape().getDims().back();
+    const auto copySize = dstMem->getShape().getDims().back() * precision.size();
+    const size_t step = count / unloop;
+    const size_t tail = count & ~(unloop - 1);
+    const auto strideSize = *(dstBlockedDesc->getStrides().rbegin() + 1) * precision.size();
+
+    auto dst_ptr = dstMem->getDataAs<uint8_t>();
+    auto src_ptr = srcMem->getDataAs<const uint8_t>();
+
+    // std::cout << "count: " << count
+    //           << " step: " << step
+    //           << " tail: " << tail
+    //           << " strideSize: " << strideSize
+    //           << " copySize: " << copySize
+    //           << "\n";
+
+    parallel_for(step, [&](size_t i) {
+        cpu_memcpy(dst_ptr + (i * unloop)     * strideSize, src_ptr + (i * unloop)     * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 1) * strideSize, src_ptr + (i * unloop + 1) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 2) * strideSize, src_ptr + (i * unloop + 2) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 3) * strideSize, src_ptr + (i * unloop + 3) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 4) * strideSize, src_ptr + (i * unloop + 4) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 5) * strideSize, src_ptr + (i * unloop + 5) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 6) * strideSize, src_ptr + (i * unloop + 6) * copySize, copySize);
+        cpu_memcpy(dst_ptr + (i * unloop + 7) * strideSize, src_ptr + (i * unloop + 7) * copySize, copySize);
+    });
+
+    for (size_t i = tail; i < count; ++i) {
+        size_t dst_offset = i * strideSize;
+        size_t src_offset = i * copySize;
+        cpu_parallel_memcpy(dst_ptr + dst_offset, src_ptr + src_offset, copySize);
+    }
+}
+
 void Reorder::optimizedNspc2Ncsp() {
     auto parentEdge = getParentEdgeAt(0);
     auto childEdge = getChildEdgeAt(0);
@@ -411,12 +478,15 @@ void Reorder::execute(dnnl::stream strm) {
         return;
     }
 
-    if (canUseNspc2Ncsp) {
+    if (stridedCase) {
+        return optimizedStridedTP();
+    } else if (canUseNspc2Ncsp) {
         optimizedNspc2Ncsp();
     } else if (canUseNcsp2Nspc) {
         optimizedNcsp2Nspc();
     } else {
         if (prim) {
+            // std::cout << "Reorder prim args dst: " << primArgs.at(DNNL_ARG_DST).get_data_handle() << "\n";
             prim.execute(strm, primArgs);
         } else {
             THROW_CPU_NODE_ERR("doesn't have an initialized primitive.");

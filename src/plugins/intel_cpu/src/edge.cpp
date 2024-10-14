@@ -466,7 +466,7 @@ EdgePtr Edge::getSharedEdge(std::nothrow_t) const {
     return memoryFromEdge.lock();
 }
 
-void Edge::init() {
+void Edge::init(int level) {
     if (status != Status::NeedAllocation && status != Status::Uninitialized)
         return;
     DEBUG_LOG(*this);
@@ -483,6 +483,9 @@ void Edge::init() {
             DEBUG_LOG(*this, " edge inplace from ", *edgePtr, " is broken!");
             return;
         }
+
+        if (level == 0)
+            std::cout << "edge: " << name() << " shares: " << edgePtr->name() << "\n";
         sharedMemFrom(edgePtr);
     }
 }
@@ -598,6 +601,19 @@ NodePtr Edge::modifiedInPlace() const {
 
     // nothing has been found
     return nullptr;
+}
+
+static bool edgeNumaParent() {
+    static bool seq = std::getenv("EDGE_NUMA_PARENT") ? true : false;
+    return seq;
+}
+
+int Edge::numa() const {
+    if (edgeNumaParent()) {
+        return getParent()->getNumaId();
+    } else {
+        return getChild()->getNumaId();
+    }
 }
 
 }   // namespace intel_cpu

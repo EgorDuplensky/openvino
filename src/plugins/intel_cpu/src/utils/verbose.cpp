@@ -154,7 +154,8 @@ void Verbose::printInfo(const int numaId) {
 
     stream << "ov_cpu_verbose" << ','
            << "exec" << ','
-           << numaId << ','
+           << node->getExecIndex() << ','
+           << node->getNumaId() << ','
            << nodeImplementer << ','
            << nodeName << ":" << nodeType << ":" << nodeAlg << ','
            << nodePrimImplType << ','

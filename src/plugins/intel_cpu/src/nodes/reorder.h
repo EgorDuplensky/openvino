@@ -35,6 +35,10 @@ public:
         this->src_permutation = src_perm;
     }
 
+    bool needPrepareParams() const override {
+        return !stridedCase && inputShapesModified();
+    }
+
     void setOptimized(bool isOptimized) {
         this->isOptimized = isOptimized;
     }
@@ -67,7 +71,9 @@ private:
     bool isNcsp2NspcCase = false;
     bool canUseNspc2Ncsp = false;
     bool canUseNcsp2Nspc = false;
+    bool stridedCase = false;
 
+    void optimizedStridedTP();
     void optimizedNspc2Ncsp();
     void optimizedNcsp2Nspc();
     void createReorderPrimitive(const DnnlMemoryDescPtr& srcDesc, const DnnlMemoryDescPtr& dstDesc);

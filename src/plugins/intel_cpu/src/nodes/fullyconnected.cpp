@@ -117,6 +117,7 @@ bool FullyConnected::canBeExecutedInInt8() const {
 void FullyConnected::needPrepareParamsForTensorParallel() {
     if (tp_cfg.enable_tensor_parallel) {
         // must call in dynamic
+        std::cout << getName() << ": enable_tensor_parallel: true" << "\n";
         const auto dstMemoryBuffer = getDstMemoryAtPort(0);
 
         auto split_parts = [](int len, int n) {

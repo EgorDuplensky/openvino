@@ -127,6 +127,8 @@ DnnlBlockedMemoryDesc::DnnlBlockedMemoryDesc(ov::element::Type prc, const Shape&
     size_t inner_ndims = order.size() - dims.size();
 
     const bool emptyDesc = shape.hasZeroDims();
+
+    // auto tmp_strides = VectorDims(strides.size(), 0);
     if (!strides.empty()) {
         if (emptyDesc && std::any_of(strides.begin(), strides.end(), [](size_t dim) { return dim != 0; } )) {
             OPENVINO_THROW("Can't create DnnlBlockedMemoryDesc with zero dim, but with non zero strides");
