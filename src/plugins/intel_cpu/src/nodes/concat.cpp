@@ -4,8 +4,13 @@
 
 #include "concat.h"
 
+#include "cpu_types.h"
+#include "generic_partitioned_mem_block.h"
+#include "memory_desc/cpu_blocked_memory_desc.h"
+#include "memory_desc/dnnl_memory_desc.h"
 #include "openvino/op/concat.hpp"
 
+#include <iostream>
 #include <map>
 #include <utility>
 #include <vector>
@@ -66,6 +71,9 @@ Concat::Concat(const std::shared_ptr<ov::Node>& op, const GraphContext::CPtr con
         OPENVINO_THROW("Concat node with name '", getName(), "' has invalid value of axis parameter: ", axis);
     }
     this->axis = axis;
+    m_forceInplaceStrided = op->get_rt_info().count("numa_id");
+    if (std::getenv("DISABLE_INPLACE_CC"))
+        m_forceInplaceStrided = false;
 }
 
 void Concat::getSupportedDescriptors() {
@@ -97,6 +105,54 @@ void Concat::getSupportedDescriptors() {
 void Concat::initSupportedPrimitiveDescriptors() {
     if (!supportedPrimitiveDescriptors.empty())
         return;
+
+    if (m_forceInplaceStrided) {
+        NodeConfig config;
+
+        config.outConfs.resize(1);
+        config.outConfs[0].inPlace(-1);
+        config.outConfs[0].constant(false);
+
+        auto outputShape = getOutputShapeAtPort(0);
+        outputPrecision = getOriginalInputPrecisionAtPort(0);
+        auto desc = std::make_shared<CpuBlockedMemoryDesc>(outputPrecision,
+                                                           outputShape);
+        config.outConfs[0].setMemDesc(desc);
+
+        VectorDims order(outputShape.getRank());
+        std::iota(order.begin(), order.end(), 0);
+        auto outputStrides = std::make_shared<CpuBlockedMemoryDesc>(outputPrecision, outputShape)->getStrides();
+        auto inputShape = getInputShapeAtPort(0);
+        auto inputStrides = outputStrides;
+        auto splitDim = outputShape.getDims().back();
+        auto offset = splitDim / getParentEdges().size();
+        config.inConfs.resize(getParentEdges().size());
+
+        // std::cout << "Concat: " << outputShape << "\n";
+
+        for (size_t i = 0; i < getParentEdges().size(); ++i) {
+            config.inConfs[i].inPlace(0);
+            config.inConfs[i].constant(false);
+            VectorDims offsetPaddingToData(getInputShapeAtPort(i).getRank(), 0);
+            offsetPaddingToData.back() = offset * i;
+            // VectorDims offsetPaddingToData = {0, 0, offset * i};
+            auto desc = std::make_shared<CpuBlockedMemoryDesc>(outputPrecision,
+                                                               getInputShapeAtPort(i),
+                                                               getInputShapeAtPort(i).getDims(),
+                                                               order,
+                                                               // offset * i,
+                                                               0,
+                                                               offsetPaddingToData,
+                                                               inputStrides);
+            // std::cout << "Concat input: " << i << " cpu desc: " << *desc << "\n";
+            auto dnnlDesc = MemoryDescUtils::convertToDnnlMemoryDesc(desc)->getDnnlDesc();
+            // std::cout << "Concat input: " << i << " dnnl desc: " << dnnlDesc << "\n";
+            config.inConfs[i].setMemDesc(desc);
+        }
+
+        supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown);
+        return;
+    }
 
     auto& originInputPrecisions = getOriginalInputPrecisions();
     inputPrecision = originInputPrecisions[0];
@@ -479,6 +535,7 @@ void Concat::initOptimalPrimitiveDescriptor() {
 
 void Concat::execute(dnnl::stream strm) {
     if (isInPlace()) {
+        // std::cout << "Concat: " << getName() << " is inplace" << "\n";
         return;
     }
 
@@ -678,6 +735,8 @@ void Concat::resolveInPlaceEdges(Edge::LOOK look) {
         return;
     }
 
+    // std::cout << "Resolving in place for a Concat node: " << getName() << "\n";
+
     auto selected_pd = getSelectedPrimitiveDescriptor();
     if (selected_pd == nullptr)
         OPENVINO_THROW("Preferable primitive descriptor is not set.");
@@ -713,12 +772,33 @@ void Concat::resolveInPlaceEdges(Edge::LOOK look) {
 
         auto memDesc = selected_pd->getConfig().inConfs[i].getMemDesc();
         MemoryPtr newMem;
-        if (partDim != 0) {
-            auto memBlock = std::make_shared<PartitionedMemoryBlock>(baseMemBlock, baseDim, offset, partDim);
-            newMem = std::make_shared<Memory>(getEngine(), memDesc, memBlock);
+
+        VectorDims chunks{1, numberOfInputs};
+        VectorDims offsets{0, i};
+
+        // std::cout << "Concat: " << getName() << "Resolve inplace edges input: " << i << " desc: " << *memDesc << "\n";
+
+        if (m_forceInplaceStrided) {
+            if (partDim != 0) {
+                auto memBlock =
+                    std::make_shared<GenericPartitionedMemoryBlock>(baseMemBlock,
+                                                                    chunks,
+                                                                    offsets,
+                                                                    memDesc->as<CpuBlockedMemoryDesc>()->getStrides(),
+                                                                    memDesc->getPrecision());
+                newMem = std::make_shared<Memory>(getEngine(), memDesc, memBlock);
+            } else {
+                // empty tensor, no need to reference a part, default memory is enough
+                newMem = std::make_shared<Memory>(getEngine(), memDesc);
+            }
         } else {
-            // empty tensor, no need to reference a part, default memory is enough
-            newMem = std::make_shared<Memory>(getEngine(), memDesc);
+            if (partDim != 0) {
+                auto memBlock = std::make_shared<PartitionedMemoryBlock>(baseMemBlock, baseDim, offset, partDim);
+                newMem = std::make_shared<Memory>(getEngine(), memDesc, memBlock);
+            } else {
+                // empty tensor, no need to reference a part, default memory is enough
+                newMem = std::make_shared<Memory>(getEngine(), memDesc);
+            }
         }
 
         parentEdge->reuse(newMem);

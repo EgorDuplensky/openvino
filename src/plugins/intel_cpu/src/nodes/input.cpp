@@ -166,6 +166,8 @@ void Input::selectOptimalPrimitiveDescriptor() {
     // and just use parent memory descriptor for Output node to avoid reorders insertion
     NodeConfig config({PortConfig(getParentOutputMemDesc(getParentEdgeAt(0)), BlockedMemoryDesc::FULL_MASK, 0)}, {});
 
+    // std::cout << "Output node: " << this->getName() << " use parent desc: " << *config.inConfs[0].getMemDesc() << "\n";
+
     supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::unknown);
     selectPrimitiveDescriptorByIndex(0);
 }

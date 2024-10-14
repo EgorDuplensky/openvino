@@ -78,6 +78,8 @@ inline void ConvertToCPUSpecificOpset(std::shared_ptr<ov::Model> &model, int num
     CPU_REGISTER_PASS_COMMON(manager, FullyConnectedBiasFusion);
     CPU_REGISTER_PASS_X64(manager, MoveFCReshapeToWeights);
     CPU_REGISTER_PASS_X64(manager, ov::pass::Validate);
+    CPU_REGISTER_PASS_X64(manager, ov::pass::Serialize, "before_split.xml", "/dev/null");
+    // ov::pass::Serialize("before_split.xml", "/dev/null").run_on_model(model);
 
     if ((numSubStreams >= 1 || std::getenv("FORCE_SPLIT")) && !std::getenv("DISABLE_SPLIT")) {
         std::cout << "numSubStreams: " << numSubStreams << "\n";

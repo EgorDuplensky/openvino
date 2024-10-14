@@ -671,6 +671,13 @@ std::ostream& operator<<(std::ostream& os, const IMemory& mem) {
     return os;
 }
 
+std::ostream & operator<<(std::ostream & os, const VectorDims& dims) {
+    if (!dims.empty())
+        os << Shape{dims}.toString();
+
+    return os;
+}
+
 void print_dnnl_memory(const dnnl::memory& memory, const size_t size, const int id, const char* message) {
     const size_t s = memory.get_desc().get_size() / sizeof(float);
     std::cout << message << " " << id << " size: " << s << ", values: ";

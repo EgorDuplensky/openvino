@@ -52,6 +52,7 @@ private:
     bool canExecRef = false;
     static constexpr size_t MAX_RANK_REF = 6;
     dnnl::primitive prim;
+    bool m_forceInplaceStrided = false;
 };
 
 }   // namespace node

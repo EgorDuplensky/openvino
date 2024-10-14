@@ -171,8 +171,6 @@ ov::pass::ConvertFullyConnectedToFullyConnectedCompressed::ConvertFullyConnected
 
         OutputVector inputs{fc_input_a, fc_input_b, fc_input_bias, fc_input_scale, fc_input_zp};
 
-        std::cout << "ConvertFullyConnectedToFullyConnectedCompressed" << "\n";
-
         auto new_fc = std::make_shared<ov::op::internal::FullyConnectedCompressed>(inputs, fc->get_output_type());
 
         result_nodes.push_back(new_fc);

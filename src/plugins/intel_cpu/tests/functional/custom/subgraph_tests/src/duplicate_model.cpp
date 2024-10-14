@@ -70,7 +70,8 @@ public:
         auto rv = std::make_shared<ov::op::v6::ReadValue>(params[1], var);
         auto add = std::make_shared<ov::op::v1::Add>(params[0], rv);
         auto assign = std::make_shared<ov::op::v6::Assign>(add, var);
-        auto mamtmul_input = std::make_shared<ov::op::v0::Constant>(ov::test::utils::create_and_fill_tensor(precision, Shape{K, K}));
+        auto weights = ov::test::utils::create_and_fill_tensor(precision, Shape{K, K});
+        auto mamtmul_input = std::make_shared<ov::op::v0::Constant>(weights);
         auto matmul = std::make_shared<ov::op::v0::MatMul>(add, mamtmul_input, false, true);
         auto swish = std::make_shared<ov::op::v4::Swish>(matmul);
 
@@ -81,7 +82,8 @@ public:
         // auto sdp = std::make_shared<ov::op::v13::ScaledDotProductAttention>(swish, concatK, concatV, false);
 
         auto add_2 = std::make_shared<ov::op::v1::Add>(swish, add);
-        auto mamtmul_2_input = std::make_shared<ov::op::v0::Constant>(ov::test::utils::create_and_fill_tensor(precision, Shape{N, K}));
+        auto weights_2 = ov::test::utils::create_and_fill_tensor(precision, Shape{N, K});
+        auto mamtmul_2_input = std::make_shared<ov::op::v0::Constant>(weights_2);
         auto matmul_2 = std::make_shared<ov::op::v0::MatMul>(add_2, mamtmul_2_input, false, true);
         auto result_0 = std::make_shared<ov::op::v0::Result>(matmul_2);
 

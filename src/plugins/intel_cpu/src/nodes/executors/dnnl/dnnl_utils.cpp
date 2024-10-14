@@ -52,6 +52,7 @@ MemoryPtr prepareWeightsMemory(const DnnlMemoryDescPtr srcWeightDesc,
             // prevent reorderData from doing conversion
             Memory srcMemory{eng, srcWeightDesc->cloneWithNewPrecision(dst_wdt), weightsMem->getData()};
             MemoryPtr _ptr = std::make_shared<Memory>(eng, dstWeightDesc);
+            // std::cout << "Getting runtime cache to reorder data 1" << "\n";
             auto rtCache = context->getRuntimeCache();
             node::Reorder::reorderData(srcMemory, *_ptr, rtCache);
 
@@ -77,6 +78,7 @@ MemoryPtr prepareWeightsMemory(const DnnlMemoryDescPtr srcWeightDesc,
 
         Memory srcMemory{eng, srcWeightDesc, weightsMem->getData()};
         MemoryPtr _ptr = std::make_shared<Memory>(eng, dstWeightDesc);
+        // std::cout << "Getting runtime cache to reorder data 1" << "\n";
         auto rtCache = context->getRuntimeCache();
         node::Reorder::reorderData(srcMemory, *_ptr, rtCache, preprocessing == InputPrepType::FTZ);
 

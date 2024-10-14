@@ -23,7 +23,7 @@ static std::vector<int> allocate_workers(const std::vector<int>& grouped_works, 
     auto n_groups = grouped_works.size();
     // allocate 1 worker for each group
     std::vector<int> g_workers(n_groups, 1);
-    auto left_workers = n_workers - n_groups;
+    int left_workers = n_workers - n_groups;
     while (left_workers > 0) {
         // which group is working hardest?
         float hardest_works = 0;

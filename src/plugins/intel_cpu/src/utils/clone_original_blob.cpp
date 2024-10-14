@@ -105,6 +105,9 @@ InputPrepType requiresPreProcessing(const IMemory& blob, GraphContext::CPtr cont
         return InputPrepType::SimpleClone;
     }
 
+    std::cout << "NumNumaNodes: " << context->getNumNumaNodes() << "\n";
+    std::cout << "NumStreams: " << context->getCPUStreamExecutor()->get_streams_num() << "\n";
+
     if (context->getWeightsCache() &&
         context->getNumNumaNodes() > 1 &&
         context->getCPUStreamExecutor()->get_streams_num() > 1) {

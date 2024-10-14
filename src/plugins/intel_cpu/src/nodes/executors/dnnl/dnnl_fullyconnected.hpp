@@ -73,7 +73,7 @@ public:
             return;
         }
         const auto newPrimMemDesc = m_primitive->scratchPadDesc();
-        m_scratchPadMemory = m_context->getScratchPad(numaNodeID)->createScratchPadMem(newPrimMemDesc);
+        m_scratchPadMemory = m_context->getScratchPad()->createScratchPadMem(newPrimMemDesc);
         m_primArgs[DNNL_ARG_SCRATCHPAD] = m_scratchPadMemory->getPrimitive();
 
         if (m_primArgs.count(DNNL_ARG_WEIGHTS)) {
@@ -146,7 +146,7 @@ private:
         if (currentPrimitive && currentPrimitive->scratchPadDesc()->isCompatible(*newPrimMemDesc))
             return;
 
-        m_scratchPadMemory = m_context->getScratchPad(curNumaNode)->createScratchPadMem(newPrimMemDesc);
+        m_scratchPadMemory = m_context->getScratchPad()->createScratchPadMem(newPrimMemDesc);
         m_primArgs[DNNL_ARG_SCRATCHPAD] = m_scratchPadMemory->getPrimitive();
     }
 

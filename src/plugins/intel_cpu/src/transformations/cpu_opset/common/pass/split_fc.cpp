@@ -107,9 +107,37 @@ ov::intel_cpu::SplitFC::SplitFC(int sub_stream_num) {
         auto slice_piece_of_input = [](std::shared_ptr<ov::Node> weights, int split_dim, int split_num, int idx) -> std::shared_ptr<ov::Node> {
             // int64_t offset = N * (i + 1);
             // std::cout << weights->get_shape() << "\n";
+            if (weights->get_shape().size() < split_dim + 1)
+                return weights;
+
             size_t N = weights->get_shape()[split_dim];
             if (N < 2)
                 return weights;
+
+            if (weights->get_shape().size() == 1) {
+                int N_piece = N / split_num;
+                // int K = weights->get_shape()[split_dim + 1];
+
+                std::vector<int64_t> begin{N_piece * idx}; // Start from {0, 0}
+                std::vector<int64_t> end{N_piece * (idx + 1)};
+                // end.back() = offset;
+                std::vector<int64_t> strides(1, 1); // Stride of 1 for both dimensions
+                // Optionally, you can define masks if necessary
+                std::vector<int64_t> begin_mask(1, 0); // Include all elements starting from 'begin'
+                // begin_mask.back() = 0;
+                std::vector<int64_t> end_mask(1, 0);   // Include all elements up to 'end'
+                // end_mask.back() = 0;
+
+                // Create the StridedSlice node
+                return std::make_shared<ov::op::v1::StridedSlice>(
+                    weights,
+                    ov::op::v0::Constant::create(ov::element::i64, {begin.size()}, begin),
+                    ov::op::v0::Constant::create(ov::element::i64, {end.size()}, end),
+                    ov::op::v0::Constant::create(ov::element::i64, {strides.size()}, strides),
+                    begin_mask,
+                    end_mask);
+            }
+
             int N_piece = N / split_num;
             int K = weights->get_shape()[split_dim + 1];
 
@@ -124,25 +152,34 @@ ov::intel_cpu::SplitFC::SplitFC(int sub_stream_num) {
             // end_mask.back() = 0;
 
             // Create the StridedSlice node
-            return std::make_shared<ov::op::v1::StridedSlice>(
+            auto ss = std::make_shared<ov::op::v1::StridedSlice>(
                 weights,
                 ov::op::v0::Constant::create(ov::element::i64, {begin.size()}, begin),
                 ov::op::v0::Constant::create(ov::element::i64, {end.size()}, end),
                 ov::op::v0::Constant::create(ov::element::i64, {strides.size()}, strides),
                 begin_mask,
                 end_mask);
-        };
-
-        for (int i = 0; i < split_num; i++) {
-            wgt_node_vec[i] = slice_piece_of_input(wgt_item, split_dim, split_num, i);
-            wgt_node_vec[i]->set_friendly_name("StridedSliceInplaceSplitW_" + std::to_string(i));
 
             auto disable_consant_folding = [](Node* node) {
                 ov::disable_constant_folding(node->shared_from_this());
             };
 
             std::unordered_set<Node *> visited;
-            ov::op::util::visit_constant_path(wgt_node_vec[i].get(), visited, disable_consant_folding);
+            ov::op::util::visit_constant_path(ss.get(), visited, disable_consant_folding);
+
+            return ss;
+        };
+
+        for (int i = 0; i < split_num; i++) {
+            wgt_node_vec[i] = slice_piece_of_input(wgt_item, split_dim, split_num, i);
+            wgt_node_vec[i]->set_friendly_name("StridedSliceInplaceSplitW_" + std::to_string(i));
+
+            // auto disable_consant_folding = [](Node* node) {
+            //     ov::disable_constant_folding(node->shared_from_this());
+            // };
+
+            // std::unordered_set<Node *> visited;
+            // ov::op::util::visit_constant_path(wgt_node_vec[i].get(), visited, disable_consant_folding);
         }
 
         std::vector<ov::Output<ov::Node>> bias_node_vec(split_num);
@@ -184,12 +221,12 @@ ov::intel_cpu::SplitFC::SplitFC(int sub_stream_num) {
                         "StridedSliceInplaceSplitWZ_" + std::to_string(i));
                 }
 
-                auto disable_consant_folding = [](Node* node) {
-                    ov::disable_constant_folding(node->shared_from_this());
-                };
+                // auto disable_consant_folding = [](Node* node) {
+                //     ov::disable_constant_folding(node->shared_from_this());
+                // };
 
-                std::unordered_set<Node*> visited;
-                ov::op::util::visit_constant_path(decompression_subtract_node_vec[i].get_node(), visited, disable_consant_folding);
+                // std::unordered_set<Node*> visited;
+                // ov::op::util::visit_constant_path(decompression_subtract_node_vec[i].get_node(), visited, disable_consant_folding);
             }
         }
 

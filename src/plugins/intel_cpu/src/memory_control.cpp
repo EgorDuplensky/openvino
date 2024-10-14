@@ -4,8 +4,10 @@
 
 #include "memory_control.hpp"
 
+#include <algorithm>
 #include <ov_optional.hpp>
 
+#include "edge.h"
 #include "node.h"
 #include "openvino/runtime/memory_solver.hpp"
 
@@ -169,7 +171,7 @@ class MemoryManageNonOverlapingSets : public IMemoryManager {
 public:
     MemoryManageNonOverlapingSets(std::vector<size_t> syncInds) : m_syncInds(std::move(syncInds)) {}
     void insert(const MemoryRegion& reg) override {
-        MemorySolver::Box box = {reg.start, reg.finish, reg.size, reg.id};
+        MemorySolver::Box box = {reg.start, reg.finish, reg.size, reg.id, reg.numaId};
         if (-1 != reg.finish) {
             //We have to extend the lifespan of tensors that are crossing a sync point border in order to save
             //the intermediate computation results from possible loss due to the tensor resize
@@ -183,6 +185,9 @@ public:
                     box.finish = -1;
                 } else {
                     box.finish = *itr_upper;
+                    std::cout << "Cut region: "
+                              << reg.id << "[" << reg.start << " - " << reg.finish << "]" << " to "
+                              << box.id << "[" << box.start << " - " << box.finish << "]" << "\n";
                 }
             }
         }
@@ -208,7 +213,8 @@ private:
             bool groupFound = false;
             for (auto& group : groups) {
                 const auto& lastBox = group.back();
-                if (lastBox.start > box.finish || lastBox.finish < box.start) {
+                if ((lastBox.start > box.finish || lastBox.finish < box.start)
+                    && lastBox.numaId == box.numaId) {
                     group.push_back(box);
                     groupFound = true;
                     break;
@@ -220,11 +226,15 @@ private:
             }
         }
         for (auto& group : groups) {
+            std::cout << "New group: " << "\n";
             auto grpMemBlock = std::make_shared<MemoryBlockWithRelease>();
             for (auto& box : group) {
+                std::cout << box.id << "[" << box.start << " - " << box.finish << "]" << ", ";
                 m_internalBlocks[box.id] = grpMemBlock;
             }
+            std::cout << "\n";
         }
+
         m_boxes.clear();
     }
 
@@ -295,23 +305,43 @@ MemoryControl::RegionHandlerPtr buildHandler(F&& f, Args&&... args) {
 MemoryControl::MemoryControl(std::vector<size_t> syncInds) {
     // init handlers
 
-    // handler for dynamic tensors
-    m_handlers.emplace_back(buildHandler<MemoryManagerStatic>([](const MemoryRegion& reg) {
-        if (reg.size < 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
-            MemoryRegion::AllocType::POD != reg.alloc_type) {
-            return false;
-        }
-        return true;
-    }));
+    if (std::getenv("DISABLE_MEMORY_REUSE")) {
+        // handler for dynamic tensors
+        m_handlers.emplace_back(buildHandler<MemoryManagerIO>([](const MemoryRegion& reg) {
+            if (reg.size < 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
+                MemoryRegion::AllocType::POD != reg.alloc_type) {
+                return false;
+            }
+            return true;
+        }));
 
-    // handler for static tensors
-    m_handlers.emplace_back(buildHandler<MemoryManageNonOverlapingSets>([](const MemoryRegion& reg) {
-        if (reg.size >= 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
-            MemoryRegion::AllocType::POD != reg.alloc_type) {
-            return false;
-        }
-        return true;
-    }, std::move(syncInds)));
+        // handler for static tensors
+        m_handlers.emplace_back(buildHandler<MemoryManagerIO>([](const MemoryRegion& reg) {
+            if (reg.size >= 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
+                MemoryRegion::AllocType::POD != reg.alloc_type) {
+                return false;
+            }
+            return true;
+        }));
+    } else {
+        // handler for dynamic tensors
+        m_handlers.emplace_back(buildHandler<MemoryManagerStatic>([](const MemoryRegion& reg) {
+            if (reg.size < 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
+                MemoryRegion::AllocType::POD != reg.alloc_type) {
+                return false;
+            }
+            return true;
+        }));
+
+        // handler for static tensors
+        m_handlers.emplace_back(buildHandler<MemoryManageNonOverlapingSets>([](const MemoryRegion& reg) {
+            if (reg.size >= 0 || MemoryRegion::RegionType::VARIABLE != reg.type ||
+                MemoryRegion::AllocType::POD != reg.alloc_type) {
+                return false;
+            }
+            return true;
+        }, std::move(syncInds)));
+    }
 
     //handler for I/O tensors, so far simply individual blocks
     m_handlers.emplace_back(buildHandler<MemoryManagerIO>([](const MemoryRegion& reg) {
@@ -364,6 +394,9 @@ void MemoryControl::releaseMemory() {
     m_allocated = false;
 }
 
+using edgeCluster = std::unordered_set<EdgePtr>;
+using edgeClusters = std::vector<edgeCluster>;
+
 edgeClusters MemoryControl::findEdgeClusters(const std::vector<EdgePtr>& graphEdges) {
     typedef std::unordered_map<EdgePtr, size_t> edge_cluster_idx_map_t;
 
@@ -379,8 +412,15 @@ edgeClusters MemoryControl::findEdgeClusters(const std::vector<EdgePtr>& graphEd
         EdgePtr last_shared_edge = nullptr;
 
         // find cluster index
+        auto prevNuma = edge->getParent()->getNumaId();
         for (auto shared_edge = edge->getSharedEdge(std::nothrow); shared_edge;
              shared_edge = shared_edge->getSharedEdge(std::nothrow)) {
+            auto curNuma = shared_edge->getParent()->getNumaId();
+
+            // if (curNuma != prevNuma)
+            //     break;
+
+            prevNuma = curNuma;
             auto shared_edge_it = edge_cluster_indices.find(shared_edge);
             if (shared_edge_it != edge_cluster_indices.end()) {
                 cluster_idx = shared_edge_it->second;
@@ -397,10 +437,28 @@ edgeClusters MemoryControl::findEdgeClusters(const std::vector<EdgePtr>& graphEd
         else
             edge_clusters[cluster_idx].emplace(edge);
 
+        prevNuma = edge->getParent()->getNumaId();
         for (auto shared_edge = edge->getSharedEdge(std::nothrow); shared_edge != last_shared_edge;
              shared_edge = shared_edge->getSharedEdge(std::nothrow)) {
+            auto curNuma = shared_edge->getParent()->getNumaId();
+
+            if (curNuma != prevNuma)
+                break;
+            prevNuma = curNuma;
+
             edge_cluster_indices.emplace(shared_edge, cluster_idx);
             edge_clusters[cluster_idx].emplace(shared_edge);
+        }
+    }
+
+    for (const auto& edge_cluster : edge_clusters) {
+        auto any_edge = *edge_cluster.begin();
+        const auto single_numa_cluster = std::all_of(edge_cluster.begin(), edge_cluster.end(),
+                                                     [&any_edge](const EdgePtr& edge) {
+                                                         return edge->getParent()->getNumaId() == any_edge->getParent()->getNumaId();
+                                                     });
+        if (!single_numa_cluster) {
+            OPENVINO_THROW("Not all the edges in a cluster are the same.");
         }
     }
 

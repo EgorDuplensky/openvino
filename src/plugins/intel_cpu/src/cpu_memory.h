@@ -59,12 +59,20 @@ public:
      * @return status whether the memory reallocation was performed
      */
     virtual bool resize(size_t size) = 0;
+    virtual bool resize_safe(size_t size) {
+        // return false;
+        std::lock_guard<std::mutex> quard(mutex);
+        return resize(size);
+    }
 
     /**
      * @brief Check if the object has control over underlying memory buffer
      * @return status whether the object has control over underlying memory buffer
      */
     virtual bool hasExtBuffer() const noexcept = 0;
+
+private:
+    std::mutex mutex;
 };
 
 /**
@@ -76,6 +84,11 @@ public:
     void* getRawPtr() const noexcept override;
     void setExtBuff(void* ptr, size_t size) override;
     bool resize(size_t size) override;
+    // bool resize_safe(size_t size) override {
+    //     std::lock_guard<std::mutex> quard(mutex);
+    //     return resize(size);
+    // }
+
     bool hasExtBuffer() const noexcept override;
     void free();
 

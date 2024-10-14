@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <thread>
 #include "openvino/runtime/system_conf.hpp"
 #include "openvino/runtime/threading/cpu_streams_executor.hpp"
 #include "sub_memory_manager.hpp"
@@ -33,7 +34,7 @@ public:
                        int numNumaNodes = 1,
                        std::shared_ptr<ov::threading::CPUStreamsExecutor> streamExecutor = nullptr,
                        std::shared_ptr<SubMemoryManager> sub_memory_manager = nullptr,
-                       std::shared_ptr<node::MemoryStatesRegister> memoryStatesRegister = nullptr,
+                       std::shared_ptr<std::vector<std::shared_ptr<node::MemoryStatesRegister>>> memoryStatesRegister = nullptr,
                        std::shared_ptr<NetworkMemoryControl> networkMemoryControl = nullptr,
                        std::shared_ptr<std::vector<MultiCachePtr>> rtParamsCaches = nullptr,
                        std::shared_ptr<std::vector<DnnlScratchPadPtr>> rtScratchPads = nullptr);
@@ -62,7 +63,7 @@ public:
     std::shared_ptr<SubMemoryManager> subMemoryManager;
     // MultiCachePtr rtParamsCache;     // primitive cache
     // DnnlScratchPadPtr rtScratchPad;  // scratch pad
-    std::shared_ptr<node::MemoryStatesRegister> memoryStatesRegister;
+    std::shared_ptr<std::vector<std::shared_ptr<node::MemoryStatesRegister>>> memoryStatesRegister;
     std::shared_ptr<NetworkMemoryControl> networkMemoryControl;
     std::shared_ptr<std::vector<MultiCachePtr>> rtParamsCaches;     // primitive cache
     std::shared_ptr<std::vector<DnnlScratchPadPtr>> rtScratchPads;  // scratch pad (each sub-stream has its own copy)
@@ -101,8 +102,12 @@ public:
         return (*global->weightsCache)[local.numaId];
     }
 
-    MultiCachePtr getParamsCache() const {
-        // std::cout << "Using runtime cache from numaId: " << local.numaId << "\n";
+    MultiCachePtr getParamsCache(int numaId = -1) const {
+        if (numaId != -1)
+            return global->rtParamsCaches->at(numaId);
+        // std::cout << "Using runtime cache from numaId: " << local.numaId
+        //           << " rtParamsCaches: " << global->rtParamsCaches->at(local.numaId)
+        //           << " threadId: " << std::this_thread::get_id() << "\n";
         return global->rtParamsCaches->at(local.numaId);
     }
 
@@ -140,11 +145,15 @@ public:
     }
 
     const std::shared_ptr<node::MemoryStatesRegister>& getMemoryStatesRegister() const {
-        return global->memoryStatesRegister;
+        return global->memoryStatesRegister->at(local.numaId);
     }
 
     const std::shared_ptr<NetworkMemoryControl>& getNetworkMemoryControl() const {
         return global->networkMemoryControl;
+    }
+
+    int numaId() const {
+        return local.numaId;
     }
 
     int level() const {

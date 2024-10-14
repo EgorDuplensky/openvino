@@ -164,6 +164,10 @@ Node::Node(const std::shared_ptr<ov::Node>& op,
     }
     if (ov::fp16_compression_is_disabled(op))
         keepOriginalPrecision = true;
+
+    if (!std::getenv("DISABLE_ASYNC")) {
+        m_numa_id = op->get_rt_info().count("numa_id") ? op->get_rt_info()["numa_id"].as<int>() : 0;
+    }
 }
 
 Node::Node(const std::string& type,
@@ -692,6 +696,7 @@ void Node::redefineOutputMemory(const size_t port, const VectorDims& new_output_
 
     const bool has_zero_dims = std::count(std::begin(new_shape), std::end(new_shape), 0lu) > 0;
     const auto mem_desc = getBaseMemDescAtOutputPort(port)->cloneWithNewDims(new_shape, has_zero_dims);
+
     for (size_t j = 0lu; j < edges.size(); j++) {
         edges[j]->getMemoryPtr()->redefineDesc(mem_desc);
     }

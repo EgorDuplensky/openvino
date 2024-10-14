@@ -50,7 +50,7 @@ public:
     void changeStatus(Status state);
     bool inPlace(LOOK look = LOOK_BOTH) const;
 
-    void init();
+    void init(int level);
     void allocate(const void* mem_ptr = nullptr);
     void allocate(MemoryBlockPtr memBlock);
     void externalAllocate(WeightsSharing::Ptr weightsCache);

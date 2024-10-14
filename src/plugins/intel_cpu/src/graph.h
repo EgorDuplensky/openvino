@@ -271,6 +271,7 @@ protected:
      */
     void ExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
     void UpdateAndExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1);
+    void UpdateAndExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const;
 
     void InferStatic(SyncInferRequest* request, int numaId);
     void InferDynamicWithAsyncNew(SyncInferRequest* request, int numaId);

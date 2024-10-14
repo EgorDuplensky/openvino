@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "openvino/core/except.hpp"
 #include "openvino/core/model.hpp"
 #include "openvino/core/node_vector.hpp"
 #include "openvino/op/assign.hpp"
@@ -31,7 +32,9 @@ static std::string v(const std::shared_ptr<ov::Node>& node) {
     return node->get_friendly_name() + ":" + node->get_type_name();
 }
 
-bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model>& f) {
+namespace ov {
+
+bool duplicate_subgraphs(const std::shared_ptr<ov::Model>& f) {
     RUN_ON_MODEL_SCOPE(DuplicateModel);
 
     int sub_stream_num = 2;  // @todo pass as argument
@@ -47,6 +50,12 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
     if (last_fc == ops.end()) {
         return false;  // model has not been changed
     }
+
+    auto r_last_concat = std::find_if(ops.rbegin(), ops.crend(), [](const std::shared_ptr<ov::Node>& node) {
+        return node->get_rt_info().count("sync_point");
+    });
+
+    std::shared_ptr<ov::Node> last_concat = *r_last_concat;
 
     // std::cout << "### Running DuplicateModel transformation" << "\n";
 
@@ -123,7 +132,6 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
             for (size_t i = 0; i < node->get_output_size(); i++) {
                 m_output_clones[node->output(i)] = clone->output(i);
             }
-            m_clones[node] = clone;
             m_nodes_to_replace.push_back(node);
 
             if (auto read_value = ov::as_type_ptr<ov::op::v6::ReadValue>(clone)) {
@@ -171,8 +179,8 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
         }
 
         void resolve_outside_connections(const std::unordered_set<std::shared_ptr<ov::Node>>& split_nodes,
-                                      std::unordered_map<std::string, op::util::VariableVector>& variable_clones,
-                                      size_t idx) {
+                                         std::unordered_map<std::string, op::util::VariableVector>& variable_clones,
+                                         size_t idx) {
             std::set<Output<Node>> split_clones;
             for (const auto& split_node : split_nodes) {
                 for (size_t i = 0; i < split_node->get_output_size(); i++) {
@@ -236,6 +244,8 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
                                  // currently we only go up when collecting the nodes. For Assign we would need to go down
                                  auto assign_clone = as_type_ptr<ov::op::v6::Assign>(
                                      assign->clone_with_new_inputs({clone_output}));
+                                 assign_clone->set_friendly_name(clone_output.get_node()->get_friendly_name() + "_clone");
+
                                  auto variable_id = assign->get_variable_id();
                                  auto variable_clone = variable_clones[variable_id][idx];
                                  assign_clone->set_variable(variable_clone);
@@ -258,7 +268,6 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
         }
 
     private:
-        std::unordered_map<std::shared_ptr<ov::Node>, std::shared_ptr<ov::Node>> m_clones;
         std::map<Output<Node>, Output<Node>> m_output_clones;
         ov::ParameterVector m_parameters;
         ov::OutputVector m_invariant_input;
@@ -307,7 +316,137 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
         ov::NodeVector nodes_to_replace;
     };
 
+    class ConcatBuilder {
+    public:
+        void add_duplicate(const std::shared_ptr<ov::Node>& node,
+                           size_t numa_id) {
+            OutputVector new_inputs;
+
+            std::cout << "Duplicating Concat node: " << v(node) << "\n";
+
+            auto clone = node->clone_with_new_inputs(node->input_values());
+
+            ov::copy_runtime_info(node, clone);
+
+            clone->set_friendly_name(node->get_friendly_name() + "_clone_" + std::to_string(numa_id));
+
+            for (size_t i = 0; i < node->get_output_size(); i++) {
+                m_output_clones[node->output(i)] = clone->output(i);
+            }
+
+            m_concat = clone;
+            m_concat->get_rt_info()["numa_id"] = numa_id;
+        }
+
+        void resolve_outside_connections(const std::unordered_set<std::shared_ptr<ov::Node>>& split_nodes,
+                                         std::unordered_map<std::string, op::util::VariableVector>& variable_clones,
+                                         size_t idx) {
+            std::set<Output<Node>> split_clones;
+            for (const auto& split_node : split_nodes) {
+                for (size_t i = 0; i < split_node->get_output_size(); i++) {
+                    split_clones.insert(split_node->output(i));
+                }
+            }
+
+            for (const auto& entry : m_output_clones) {
+                const auto& orig_output = entry.first;
+                // const auto& clone_output = entry.second;
+
+                auto target_inputs = orig_output.get_target_inputs();
+
+                if (target_inputs.empty())
+                    continue;
+
+                bool has_outside_target_node =
+                    std::any_of(target_inputs.begin(),
+                                target_inputs.end(),
+                                [this, &split_clones](const Input<Node>& input) {
+                                    // for (const auto& output : input.get_node()->outputs()) {
+                                    //     if (!m_output_clones.count(output) && !split_clones.count(output))
+                                    //         return true;
+                                    // }
+                                    // return false;
+                                    return !m_output_clones.count(input.get_node()->output(0)) &&
+                                           !split_clones.count(input.get_node()->output(0));
+                                });
+                if (has_outside_target_node) {
+                    bool output_added = false;
+
+                    for (auto& target_input : target_inputs) {
+                        auto target_node = target_input.get_node();
+                        // special handling of the connections between SubModel nodes to avoid cross numa connections
+                        if (ov::is_type<ov::intel_cpu::SubModel>(target_node)) {
+                            auto numa_id = target_node->get_rt_info()["numa_id"].as<int>();
+                            if (numa_id == m_numa_id || split_clones.count(orig_output)) {
+                                auto target_node_output = target_input.get_node()->output(0);
+                                if (!m_output_clones.count(target_node_output) && !split_clones.count(target_node_output)) {
+                                    if (!output_added) {
+                                        std::cout << *m_concat << " SubModel: Increasing output size for target: " << *target_node << "\n";
+                                        m_concat->set_output_size(m_concat->get_output_size() + 1);
+                                    }
+                                    output_added = true;
+                                    target_input.replace_source_output(m_concat->output(m_concat->get_output_size() - 1));
+                                }
+                                // for (const auto& output : target_input.get_node()->outputs()) {
+                                //     if (!m_output_clones.count(output) && !split_clones.count(output)) {
+                                //         if (!output_added) {
+                                //             m_subgraph->set_output_size(m_subgraph->get_output_size() + 1);
+                                //             m_submodel->add_results({std::make_shared<ov::op::v0::Result>(clone_output)});
+                                //         }
+                                //         output_added = true;
+                                //         target_input.replace_source_output(m_subgraph->output(m_subgraph->get_output_size() - 1));
+                                //     }
+                                // }
+                            }
+                        }
+                        // else {
+                        //     auto target_node_output = target_input.get_node()->output(0);
+                        //     if (!m_output_clones.count(target_node_output) && !split_clones.count(target_node_output)) {
+                        //         if (!output_added) {
+                        //             std::cout << *m_concat << " Increasing output size for target: " << *target_node << "\n";
+                        //             m_concat->set_output_size(m_concat->get_output_size() + 1);
+                        //         }
+                        //         output_added = true;
+                        //         target_input.replace_source_output(m_concat->output(m_concat->get_output_size() - 1));
+                        //     }
+                        // }
+                    }
+                }
+            }
+        }
+
+    private:
+        std::map<Output<Node>, Output<Node>> m_output_clones;
+        std::shared_ptr<ov::Node> m_concat;
+        int m_numa_id;
+    };
+
+    class DuplicateConcatBuilder {
+    public:
+        DuplicateConcatBuilder(size_t duplicates_num)
+            : m_concatBuilders(std::vector<ConcatBuilder>(duplicates_num)) {}
+
+        void add_duplicate(const std::shared_ptr<ov::Node>& node) {
+            for (size_t i = 0; i < m_concatBuilders.size(); i++) {
+                m_concatBuilders[i].add_duplicate(node, i);
+            }
+            nodes_to_replace.push_back(node);
+        }
+
+        void resolve_outside_connections(const std::unordered_set<std::shared_ptr<ov::Node>>& split_nodes,
+                                         std::unordered_map<std::string, op::util::VariableVector>& variable_clones) {
+            for (size_t i = 0; i < m_concatBuilders.size(); i++) {
+                m_concatBuilders[i].resolve_outside_connections(split_nodes, variable_clones, i);
+            }
+        }
+
+    private:
+        std::vector<ConcatBuilder> m_concatBuilders;
+        ov::NodeVector nodes_to_replace;
+    };
+
     std::vector<DuplicateSubgraphBuilder> builders(ordered_split_nodes.size(), DuplicateSubgraphBuilder(sub_stream_num));
+    std::vector<DuplicateConcatBuilder> concat_builders(ordered_split_nodes.size(), DuplicateConcatBuilder(sub_stream_num));
     std::vector<std::unordered_set<std::shared_ptr<ov::Node>>> all_split_nodes(ordered_split_nodes.size());
     std::unordered_map<std::string, op::util::VariableVector> variable_clones;
 
@@ -346,7 +485,9 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
             } else if (node->get_rt_info().count("other_split")) {
                 // @todo can we handle other_splits the same way we handle the main one?
                 continue;
-            // } else if (node->get_rt_info().count("sync_point")) {
+            } else if (node->get_rt_info().count("sync_point")) {
+                // concat_builders[i].add_duplicate(node);
+                continue;
             } else {
                 builders[i].add_duplicate(node, variable_clones);
             }
@@ -356,6 +497,7 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
     if (!ordered_split_nodes.empty()) {
         for (size_t i = 0; i < builders.size(); i++) {
             builders[i].resolve_outside_connections(all_split_nodes[i], variable_clones);
+            // concat_builders[i].resolve_outside_connections(all_split_nodes[i], variable_clones);
         }
     }
 
@@ -375,6 +517,58 @@ bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model
             f->remove_sink(sink);
         }
     }
+
+
+
+    return true;
+}
+
+bool duplicate_concat(const std::shared_ptr<ov::Model>& f) {
+    std::cout << "Duplicating Concat nodes ..." << "\n";
+
+    // find last fc node. There is no reason to duplicate graph after last fc node.
+    const auto& ops = f->get_ordered_ops();
+
+    auto r_last_concat = std::find_if(ops.rbegin(), ops.crend(), [](const std::shared_ptr<ov::Node>& node) {
+        return node->get_rt_info().count("sync_point");
+    });
+
+    std::shared_ptr<ov::Node> last_concat = *r_last_concat;
+    last_concat->get_rt_info()["numa_id"] = 0;
+
+    for (const auto& op : ops) {
+        if (op == last_concat || !op->get_rt_info().count("sync_point")) {
+            continue;
+        }
+
+        auto concat = op;
+        // todo assert for single output
+        auto output = concat->output(0);
+        auto target_inputs = output.get_target_inputs();
+
+        for (const auto& input : target_inputs) {
+            auto target_node = input.get_node();
+            // OPENVINO_ASSERT(ov::as_type<ov::intel_cpu::SubModel>(target_node), "SubModel op is exected after sync Concat, got: ", *target_node);
+            if (!ov::as_type<ov::intel_cpu::SubModel>(target_node)) {
+                continue;
+            }
+
+            auto clone = concat->clone_with_new_inputs(concat->input_values());
+            input.replace_source_output(clone);
+
+            clone->get_rt_info()["numa_id"] = target_node->get_rt_info()["numa_id"];
+        }
+    }
+
+    std::cout << "Done." << "\n";
+    return true;
+}
+
+} // namespace ov
+
+bool ov::intel_cpu::DuplicateModel::run_on_model(const std::shared_ptr<ov::Model>& f) {
+    duplicate_subgraphs(f);
+    duplicate_concat(f);
 
     return true;
 }

@@ -17,9 +17,25 @@ struct MemoryRegion {
     int finish;    // Execution order index of last use. -1 means inf
     int64_t size;  // size in bytes
     int64_t id;    // ID unique for each region
+    int numaId;
 
     enum class RegionType : uint8_t { VARIABLE, CONSTANT, INPUT, OUTPUT, IO } type;
     enum class AllocType : uint8_t { POD, STRING, UNKNOWN } alloc_type;
+
+    std::string typeStr() const {
+#define CASE(_type)   \
+    case RegionType::_type: \
+        return #_type;
+    switch (type) {
+        CASE(VARIABLE);
+        CASE(CONSTANT);
+        CASE(INPUT);
+        CASE(OUTPUT);
+        CASE(IO);
+    }
+#undef CASE
+    return "";
+    }
 };
 
 class MemoryControl {
