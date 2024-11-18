@@ -270,6 +270,8 @@ protected:
      * @params numaId   Numa Id to be used for an execution
      */
     void ExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
+    void ExecuteStaticNodeWithCatch(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
+    void ExecuteDynamicNodeWithCatch(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
 
     /**
      * Execute a given \p node within \p request using \p numaId
@@ -279,10 +281,14 @@ protected:
      * @params numaId   Numa Id to be used for an execution
      */
     void ExecuteNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
+    void ExecuteStaticNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
+    void ExecuteDynamicNode(const NodePtr& node, SyncInferRequest* request = nullptr, int numaId = -1) const;
 
     void InferStatic(SyncInferRequest* request, int numaId);
     template<typename UpdateStrategy>
     void InferDynamic(SyncInferRequest* request, int numaId, UpdateStrategy&& update);
+    void InferDynamicSync(SyncInferRequest* request, int numaId);
+    void InferDynamicSyncNew(SyncInferRequest* request, int numaId);
 
     friend std::shared_ptr<ov::Model> dump_graph_as_ie_ngraph_net(const Graph &graph);
 

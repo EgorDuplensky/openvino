@@ -446,8 +446,10 @@ public:
     // is a temprorary solution, do it this way for now.
     void executeStatic(const dnnl::stream strm, int numaId = -1);
     void updateShapes();
+    bool updateShapesNew();
     void updateDynamicParams();
     void executeDynamic(dnnl::stream strm, int numaId = -1);
+    void executeDynamicNew(dnnl::stream strm, int numaId = -1);
     virtual void redefineOutputMemory(const std::vector<VectorDims> &newShapes);
     void redefineOutputMemory(const size_t port, const VectorDims& new_output_shape);
     bool outputShapeDataDependency() const;

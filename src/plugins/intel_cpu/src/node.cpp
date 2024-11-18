@@ -688,60 +688,103 @@ static void fetchRawMemory(const MemoryPtr& mem) {
     }
 }
 
-void Node::updateShapes() {
-    OPENVINO_ASSERT(isDynamicNode(),
-                    "Node::updateShapes() is called to a static shape node of type: ",
-                    getTypeStr(),
-                    " with name: ",
-                    getName());
-        try {
-            if (needShapeInfer()) {
-                auto result = shapeInfer();
-                if (ShapeInferStatus::success == result.status) {
-                    redefineOutputMemory(result.dims);
-                }
-            } else {
-                //guard check for internal dynamic nodes to avoid possible overestimation of the required memory size
-                if (shapeInference && FULL_PORT_MASK == shapeInference->get_port_mask())
-                    return;
-
-                for (auto&& edge : getChildEdges()) {
-                    auto edge_ptr = edge.lock();
-                    CPU_NODE_ASSERT(edge_ptr, " has null edge");
-                    if (edge_ptr->inPlace(Edge::LOOK_UP)) {
-                        continue;
-                    }
-
-                    auto mem = edge_ptr->getMemoryPtr();
-                    CPU_NODE_ASSERT(mem, " has null output memory");
-
-                    if (mem->getShape().hasZeroDims()) {
-                        continue;
-                    }
-                    fetchRawMemory(mem);
-                }
+bool Node::updateShapesNew() {
+    // OPENVINO_ASSERT(isDynamicNode(),
+    //                 "Node::updateShapes() is called to a static shape node of type: ",
+    //                 getTypeStr(),
+    //                 " with name: ",
+    //                 getName());
+    try {
+        auto res = needShapeInfer();
+        if (res) {
+            auto result = shapeInfer();
+            if (ShapeInferStatus::success == result.status) {
+                redefineOutputMemory(result.dims);
+                lastInputDims = result.dims;
             }
-        } catch (const std::exception& exp) {
-            THROW_CPU_NODE_ERR(exp.what());
+        } else {
+            //guard check for internal dynamic nodes to avoid possible overestimation of the required memory size
+            if (shapeInference && FULL_PORT_MASK == shapeInference->get_port_mask())
+                return res;
+
+            for (auto&& edge : getChildEdges()) {
+                auto edge_ptr = edge.lock();
+                CPU_NODE_ASSERT(edge_ptr, " has null edge");
+                if (edge_ptr->inPlace(Edge::LOOK_UP)) {
+                    continue;
+                }
+
+                auto mem = edge_ptr->getMemoryPtr();
+                CPU_NODE_ASSERT(mem, " has null output memory");
+
+                if (mem->getShape().hasZeroDims()) {
+                    continue;
+                }
+                fetchRawMemory(mem);
+            }
         }
+
+        return res;
+    } catch (const std::exception& exp) {
+        THROW_CPU_NODE_ERR(exp.what());
+    }
+}
+
+void Node::updateShapes() {
+    // OPENVINO_ASSERT(isDynamicNode(),
+    //                 "Node::updateShapes() is called to a static shape node of type: ",
+    //                 getTypeStr(),
+    //                 " with name: ",
+    //                 getName());
+    try {
+        if (needShapeInfer()) {
+            auto result = shapeInfer();
+            if (ShapeInferStatus::success == result.status) {
+                redefineOutputMemory(result.dims);
+            }
+        } else {
+            //guard check for internal dynamic nodes to avoid possible overestimation of the required memory size
+            if (shapeInference && FULL_PORT_MASK == shapeInference->get_port_mask())
+                return;
+
+            for (auto&& edge : getChildEdges()) {
+                auto edge_ptr = edge.lock();
+                CPU_NODE_ASSERT(edge_ptr, " has null edge");
+                if (edge_ptr->inPlace(Edge::LOOK_UP)) {
+                    continue;
+                }
+
+                auto mem = edge_ptr->getMemoryPtr();
+                CPU_NODE_ASSERT(mem, " has null output memory");
+
+                if (mem->getShape().hasZeroDims()) {
+                    continue;
+                }
+                fetchRawMemory(mem);
+            }
+        }
+    } catch (const std::exception& exp) {
+        THROW_CPU_NODE_ERR(exp.what());
+    }
 }
 
 void Node::updateDynamicParams() {
-    OPENVINO_ASSERT(isDynamicNode(),
-                    "Node::updateDynamicParams() is called to a static shape node of type: ",
-                    getTypeStr(),
-                    " with name: ",
-                    getName());
+    // OPENVINO_ASSERT(isDynamicNode(),
+    //                 "Node::updateDynamicParams() is called to a static shape node of type: ",
+    //                 getTypeStr(),
+    //                 " with name: ",
+    //                 getName());
     try {
-        if (isExecutable()) {
-            if (needPrepareParams()) {
-                OPENVINO_ASSERT(inputShapesDefined(),
-                                "Input shapes are not defined.");
-                DEBUG_LOG(" prepareParams() on #", getExecIndex(), " ", getTypeStr(), " ", algToString(getAlgorithm()),
-                        " ", getName(), " ", getOriginalLayers());
-                prepareParams();
-            }
-        }
+        // if (isExecutable()) {
+        if (!needPrepareParams())
+            return;
+
+        // OPENVINO_ASSERT(inputShapesDefined(),
+        //                 "Input shapes are not defined.");
+        DEBUG_LOG(" prepareParams() on #", getExecIndex(), " ", getTypeStr(), " ", algToString(getAlgorithm()),
+                  " ", getName(), " ", getOriginalLayers());
+        prepareParams();
+        // }
     } catch (const std::exception& e) {
         THROW_CPU_NODE_ERR(e.what());
     }
@@ -767,6 +810,14 @@ void Node::executeDynamic(dnnl::stream strm, int numaId) {
     }
 
     updateLastInputDims();
+}
+
+void Node::executeDynamicNew(dnnl::stream strm, int numaId) {
+    toNumaNode(numaId);
+
+    executeDynamicImpl(strm);
+
+    // updateLastInputDims();
 }
 
 bool Node::outputShapeDataDependency() const {

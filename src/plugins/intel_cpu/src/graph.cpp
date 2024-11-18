@@ -1354,11 +1354,49 @@ inline void Graph::ExecuteNode(const NodePtr& node, SyncInferRequest* request, i
     node->execute(m_stream, numaId);
 }
 
+inline void Graph::ExecuteStaticNode(const NodePtr& node, SyncInferRequest* request, int numaId) const {
+    if (request)
+        request->throw_if_canceled();
+
+    node->executeStatic(m_stream, numaId);
+}
+
+inline void Graph::ExecuteDynamicNode(const NodePtr& node, SyncInferRequest* request, int numaId) const {
+    if (request)
+        request->throw_if_canceled();
+
+    node->executeDynamic(m_stream, numaId);
+}
+
 inline void Graph::ExecuteNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const {
     VERBOSE_PERF_DUMP_ITT_DEBUG_LOG(itt::domains::intel_cpu, node, getConfig());
 
     try {
         ExecuteNode(node, request, numaId);
+    } catch (const ov::Cancelled&) {
+        throw;
+    } catch (const std::exception& exp) {
+        OPENVINO_THROW(*node, exp.what());
+    }
+}
+
+inline void Graph::ExecuteStaticNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const {
+    VERBOSE_PERF_DUMP_ITT_DEBUG_LOG(itt::domains::intel_cpu, node, getConfig());
+
+    try {
+        ExecuteStaticNode(node, request, numaId);
+    } catch (const ov::Cancelled&) {
+        throw;
+    } catch (const std::exception& exp) {
+        OPENVINO_THROW(*node, exp.what());
+    }
+}
+
+inline void Graph::ExecuteDynamicNodeWithCatch(const NodePtr& node, SyncInferRequest* request, int numaId) const {
+    VERBOSE_PERF_DUMP_ITT_DEBUG_LOG(itt::domains::intel_cpu, node, getConfig());
+
+    try {
+        ExecuteDynamicNode(node, request, numaId);
     } catch (const ov::Cancelled&) {
         throw;
     } catch (const std::exception& exp) {
@@ -1377,6 +1415,61 @@ void Graph::InferDynamic(SyncInferRequest* request, int numaId, UpdateStrategy&&
 
             ExecuteNodeWithCatch(node, request, numaId);
         }
+    }
+}
+
+void Graph::InferDynamicSync(SyncInferRequest* request, int numaId) {
+    for (const auto& node : m_executableGraphNodes) {
+        if (request)
+            request->throw_if_canceled();
+
+        if (node->isDynamicNode()) {
+            node->updateShapes();
+
+            if (node->isExecutable()) {
+                node->updateDynamicParams();
+
+                try {
+                    node->executeDynamicNew(m_stream, numaId);
+                } catch (const ov::Cancelled&) {
+                    throw;
+                } catch (const std::exception& exp) {
+                    OPENVINO_THROW(*node, exp.what());
+                }
+            }
+
+            node->updateLastInputDims();
+        } else {
+            node->executeStatic(m_stream, numaId);
+        }
+    }
+}
+
+void Graph::InferDynamicSyncNew(SyncInferRequest* request, int numaId) {
+    for (const auto& node : m_executableGraphNodes) {
+        if (request)
+            request->throw_if_canceled();
+
+        if (!node->isDynamicNode()) {
+            node->executeStatic(m_stream, numaId);
+            continue;
+        }
+
+        auto updated = node->updateShapesNew();
+
+        if (node->isExecutable()) {
+            if (updated)
+                node->updateDynamicParams();
+
+            try {
+                node->executeDynamicNew(m_stream, numaId);
+            } catch (const ov::Cancelled&) {
+                throw;
+            } catch (const std::exception& exp) {
+                OPENVINO_THROW(*node, exp.what());
+            }
+        }
+        // node->updateLastInputDims();
     }
 }
 
@@ -1404,11 +1497,15 @@ void Graph::Infer(SyncInferRequest* request) {
     }
 
     switch (status) {
+    // case Status::ReadyDynamic:
+    //     InferDynamic(request, numaId, UpdateNodes(m_executableGraphNodes));
+    //     break;
+    // case Status::ReadyDynamicSeq:
+    //     InferDynamic(request, numaId, UpdateNodesSeq(m_executableGraphNodes));
+    //     break;
     case Status::ReadyDynamic:
-        InferDynamic(request, numaId, UpdateNodes(m_executableGraphNodes));
-        break;
     case Status::ReadyDynamicSeq:
-        InferDynamic(request, numaId, UpdateNodesSeq(m_executableGraphNodes));
+        InferDynamicSyncNew(request, numaId);
         break;
     case Status::ReadyStatic:
         InferStatic(request, numaId);
