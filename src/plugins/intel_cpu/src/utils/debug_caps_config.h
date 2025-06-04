@@ -53,7 +53,7 @@ public:
     std::string memoryStatisticsDumpPath;
 
     struct TransformationFilter {
-        enum Type : uint8_t { PreLpt = 0, Lpt, PostLpt, Snippets, Specific, NumOfTypes };
+        enum Type : uint8_t { PreLpt = 0, Lpt, PostLpt, Snippets, Mlir, Specific, NumOfTypes };
         std::bitset<NumOfTypes> filter;
 
         PropertySetterPtr getPropertySetter() {

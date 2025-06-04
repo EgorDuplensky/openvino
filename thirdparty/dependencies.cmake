@@ -610,6 +610,53 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/nlohmann_json
         PATTERN WORKSPACE.bazel EXCLUDE
         PATTERN wsjcpp.yml EXCLUDE)
 
+#
+# LLVM / MLIR
+#
+
+if(ENABLE_MLIR_FOR_CPU)
+    # Check if LLVM submodule exists
+    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/thirdparty/llvm-project/llvm/CMakeLists.txt")
+        message(FATAL_ERROR "LLVM submodule not found. Please run: git submodule update --init --recursive thirdparty/llvm-project")
+    endif()
+
+    # LLVM build configuration
+    set(LLVM_TARGETS_TO_BUILD "X86;AArch64;RISCV" CACHE STRING "LLVM targets to build")
+    set(LLVM_ENABLE_PROJECTS "mlir" CACHE STRING "Enable MLIR project")
+    set(LLVM_BUILD_EXAMPLES OFF CACHE BOOL "Build LLVM examples")
+    set(LLVM_BUILD_TESTS OFF CACHE BOOL "Build LLVM tests") 
+    set(LLVM_BUILD_TOOLS ON CACHE BOOL "Build LLVM tools")
+    set(LLVM_INCLUDE_EXAMPLES OFF CACHE BOOL "Include LLVM examples")
+    set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "Include LLVM tests")
+    set(LLVM_INCLUDE_TOOLS ON CACHE BOOL "Include LLVM tools")
+    set(LLVM_ENABLE_RTTI ON CACHE BOOL "Enable RTTI for LLVM")
+    set(LLVM_ENABLE_EH ON CACHE BOOL "Enable exception handling for LLVM")
+    
+    # Add LLVM as subdirectory
+    add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty/llvm-project/llvm ${CMAKE_BINARY_DIR}/thirdparty/llvm-project EXCLUDE_FROM_ALL)
+    
+    # Create MLIR interface library
+    add_library(mlir_interface INTERFACE)
+    target_include_directories(mlir_interface INTERFACE
+        ${CMAKE_SOURCE_DIR}/thirdparty/llvm-project/mlir/include
+        ${CMAKE_BINARY_DIR}/thirdparty/llvm-project/tools/mlir/include)
+    target_link_libraries(mlir_interface INTERFACE
+        MLIRParser
+        MLIRArithDialect
+        MLIRFuncDialect
+        MLIRLLVMDialect
+        MLIRExecutionEngine
+        MLIRIR
+        MLIRTransforms
+        MLIRTargetLLVMIRExport
+        MLIRSupport)
+        
+    # Set up MLIR compilation definitions
+    target_compile_definitions(mlir_interface INTERFACE ENABLE_MLIR_FOR_CPU)
+    
+    message(STATUS "MLIR support enabled for CPU plugin")
+endif()
+
 # restore state
 
 set(CMAKE_CXX_FLAGS "${_old_CMAKE_CXX_FLAGS}")

@@ -19,6 +19,8 @@ ov_dependent_option (ENABLE_INTEL_CPU "CPU plugin for OpenVINO Runtime" ${ENABLE
 
 ov_dependent_option (ENABLE_ARM_COMPUTE_CMAKE "Enable ARM Compute build via cmake" OFF "ENABLE_INTEL_CPU" OFF)
 
+ov_dependent_option (ENABLE_MLIR_FOR_CPU "Enable MLIR support for CPU plugin" OFF "ENABLE_INTEL_CPU" OFF)
+
 ov_option (ENABLE_TESTS "unit, behavior and functional tests" OFF)
 
 if(ENABLE_TESTS)

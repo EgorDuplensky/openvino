@@ -246,6 +246,7 @@ static const TypeToNameMap& get_type_to_name_tbl() {
         {"Reference", Type::Reference},
         {"Subgraph", Type::Subgraph},
         {"SubModel", Type::SubModel},
+        // {"Mlir", Type::SubModel},
         {"PriorBox", Type::PriorBox},
         {"PriorBoxClustered", Type::PriorBoxClustered},
         {"Interaction", Type::Interaction},
@@ -383,6 +384,7 @@ std::string NameFromType(const Type type) {
         CASE(Reference);
         CASE(Subgraph);
         CASE(SubModel);
+        //CASE(Mlir);
         CASE(PriorBox);
         CASE(PriorBoxClustered)
         CASE(RandomUniform);

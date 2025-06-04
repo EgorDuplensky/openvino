@@ -221,6 +221,7 @@ std::shared_ptr<ov::ICompiledModel> Plugin::compile_model(const std::shared_ptr<
 
     transformations.PostLpt();
     transformations.Snippets();
+    transformations.Mlir();
 
     transformations.CpuSpecificOpSet();
 

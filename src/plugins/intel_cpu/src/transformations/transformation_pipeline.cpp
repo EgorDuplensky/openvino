@@ -97,6 +97,7 @@
 #include "transformations/fp16_compression/mark_decompression_convert_constant_folding.hpp"
 #include "transformations/fp16_compression/mark_floatpoint_range.hpp"
 #include "transformations/init_node_info.hpp"
+#include "transformations/mlir/capture_subgraph.hpp"
 #include "transformations/op_conversions/convert_avgpool_downgrade.hpp"
 #include "transformations/op_conversions/convert_batch_to_space.hpp"
 #include "transformations/op_conversions/convert_broadcast_to_tiles.hpp"
@@ -1540,6 +1541,19 @@ void Transformations::Snippets() {
     CPU_DEBUG_CAP_TRANSFORMATION_SCOPE(this, Snippets);
     MainSnippets();
     PostSnippets();
+}
+
+void Transformations::Mlir() {
+#ifdef ENABLE_MLIR_FOR_CPU
+    ov::pass::Manager mlirManager("CPU:Mlir");
+    const bool useMlir = CPU_DEBUG_CAP_IS_TRANSFORMATION_ENABLED(config.debugCaps, Mlir);
+    if (!useMlir) {
+        return;
+    }
+
+    CPU_REGISTER_PASS_COMMON(mlirManager, CaptureSubGraph);
+    mlirManager.run_passes(model);
+#endif
 }
 
 }  // namespace ov::intel_cpu

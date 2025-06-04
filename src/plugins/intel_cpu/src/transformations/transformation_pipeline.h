@@ -26,6 +26,7 @@ public:
     void CpuSpecificOpSet();
     void PostLpt();
     void Snippets();
+    void Mlir();
 
 private:
     std::shared_ptr<ov::Model> model;

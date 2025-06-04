@@ -281,6 +281,11 @@ if(ENABLE_KLEIDIAI_FOR_CPU)
     target_link_libraries(${TARGET_NAME} PRIVATE kleidiai)
 endif()
 
+if(ENABLE_MLIR_FOR_CPU)
+    target_link_libraries(${TARGET_NAME} PRIVATE mlir_interface)
+    target_compile_definitions(${TARGET_NAME} PRIVATE ENABLE_MLIR_FOR_CPU)
+endif()
+
 if(RISCV64)
     # Set `XBYAK_RISCV_V=1` to compile Xbyak-code for RVV-related instructions
     target_compile_definitions(xbyak_riscv INTERFACE XBYAK_RISCV_V=1)
@@ -416,6 +421,12 @@ if(BUILD_SHARED_LIBS)
     if(ENABLE_KLEIDIAI_FOR_CPU)
         target_include_directories(${TARGET_NAME}_obj SYSTEM PUBLIC $<TARGET_PROPERTY:kleidiai,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
+
+    if(ENABLE_MLIR_FOR_CPU)
+        target_include_directories(${TARGET_NAME}_obj SYSTEM PUBLIC $<TARGET_PROPERTY:mlir_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+        target_compile_definitions(${TARGET_NAME}_obj PRIVATE ENABLE_MLIR_FOR_CPU)
+    endif()
+
     if(RISCV64)
         target_include_directories(${TARGET_NAME}_obj SYSTEM PUBLIC $<TARGET_PROPERTY:xbyak_riscv::xbyak_riscv,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()

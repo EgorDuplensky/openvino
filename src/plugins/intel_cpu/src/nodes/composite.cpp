@@ -46,6 +46,7 @@ Composite::Composite(const std::shared_ptr<ov::Node>& op, const GraphContext::CP
         OPENVINO_THROW_NOT_IMPLEMENTED(errorMessage);
     }
     const auto& subModel = ov::as_type_ptr<SubModel>(op);
+
     CPU_NODE_ASSERT(subModel, "Attempt to create SubGraph node from an invalid op type: ", op);
 
     m_body = subModel->get_function();

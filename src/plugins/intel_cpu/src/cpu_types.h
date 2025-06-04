@@ -121,6 +121,7 @@ enum class Type : uint8_t {
     Multinomial,
     Subgraph,
     SubModel,
+    // Mlir,
     PriorBox,
     PriorBoxClustered,
     Interaction,
