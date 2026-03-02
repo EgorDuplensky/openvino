@@ -92,6 +92,10 @@ void TransformationTestsF::TearDown() {
 
     auto res = comparator.compare(model, model_ref);
     ASSERT_TRUE(res.valid) << res.message;
+
+    if (m_post_check) {
+        m_post_check(model);
+    }
 }
 
 void TransformationTestsF::disable_rt_info_check() {

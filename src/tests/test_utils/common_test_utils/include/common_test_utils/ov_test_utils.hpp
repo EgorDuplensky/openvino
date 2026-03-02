@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "common_test_utils/graph_comparator.hpp"
 #include "common_test_utils/test_common.hpp"
 #include "openvino/core/dimension.hpp"
@@ -23,6 +24,8 @@ public:
     void SetUp() override;
 
     void TearDown() override;
+
+    void perform_post_check(std::function<void(const std::shared_ptr<ov::Model>& model)>);
 
     // TODO: this is temporary solution to disable rt info checks that must be applied by default
     // first tests must be fixed then this method must be removed XXX-68696
@@ -45,6 +48,8 @@ private:
     bool m_disable_rt_info_check{false};
     bool m_soft_names_comparison{true};
     bool m_result_friendly_names_check{true};
+    // transformation post check
+    std::function<void(const std::shared_ptr<ov::Model>& model)> m_post_check;
 };
 
 void init_unique_names(const std::shared_ptr<ov::Model>& f, const std::shared_ptr<ov::pass::UniqueNamesHolder>& unh);

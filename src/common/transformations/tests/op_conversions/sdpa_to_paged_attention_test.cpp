@@ -652,6 +652,11 @@ TEST_P(SDPAToPATest, SDPAToPA_Qwen7bChat_General) {
         auto res = makeOP<v0::Result>({pa_aligned});
 
         model_ref = std::make_shared<ov::Model>(OutputVector{res}, params);
+
+        perform_post_check([&](const std::shared_ptr<const ov::Model>& transformed) {
+            // make sure symbols have been propogated to the newly created parameters
+            const auto& parameters = transformed->get_parameters();
+            });
     }
     // TODO: align precisions, check the copying of "fuse_names" attr in SDPAToPagedAttention
     // checking the graph structure and names, other checks are temporarily disabled:
