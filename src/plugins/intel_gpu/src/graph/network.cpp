@@ -162,6 +162,8 @@ network::network(program::ptr program, stream::ptr stream, bool is_internal, boo
     , _enable_profiling(program->get_config().get_enable_profiling())
     , _reset_arguments(true)
     , _shape_predictor(new ShapePredictor(&program->get_engine(), program->get_config().get_shape_predictor_settings())) {
+    auto model_ptr = program->get_config().get_model();
+    _model_name = model_ptr ? model_ptr->get_friendly_name() : "unknown";
     if (!_internal) {
         net_id = get_unique_net_id();
     }
@@ -209,8 +211,9 @@ network::~network() {
 
     _memory_pool->clear_pool_for_network(net_id);
     std::string dump_path = GPU_DEBUG_VALUE_OR(get_config().get_dump_profiling_data_path(), "");
+
     GPU_DEBUG_IF(!dump_path.empty()) {
-        dump_perf_data_raw(dump_path + "/perf_raw" + std::to_string(net_id) + ".csv", false, _exec_order);
+        dump_perf_data_raw(dump_path + "/perf_raw_" + _model_name + "_" + std::to_string(net_id) + ".csv", false, _exec_order);
     }
 }
 

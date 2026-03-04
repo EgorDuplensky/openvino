@@ -244,11 +244,13 @@ public:
         }
     }
 
-    void visualize(const std::shared_ptr<ov::Model>& model, const std::string& pass_name) const {
+    void visualize(const std::shared_ptr<ov::Model>& model,
+                   const std::string& pass_name,
+                   bool pass_changed_model) const {
         static size_t viz_index = 0;
         if (m_visualize.is_enabled()) {
             const auto& _visualize = [&]() {
-                auto file_name = gen_file_name(model->get_name(), pass_name, viz_index++);
+                auto file_name = gen_file_name(model->get_name(), pass_name, pass_changed_model, viz_index++);
                 ov::pass::VisualizeTree vt(file_name.concat(".svg"));
                 vt.run_on_model(model);
             };
@@ -267,11 +269,13 @@ public:
         }
     }
 
-    void serialize(const std::shared_ptr<ov::Model>& model, const std::string& pass_name) const {
+    void serialize(const std::shared_ptr<ov::Model>& model,
+                   const std::string& pass_name,
+                   bool pass_changed_model) const {
         static size_t serialize_index = 0;
         if (m_serialize.is_enabled()) {
             const auto& _serialize = [&]() {
-                auto file_name = gen_file_name(model->get_name(), pass_name, serialize_index++);
+                auto file_name = gen_file_name(model->get_name(), pass_name, pass_changed_model, serialize_index++);
                 ov::pass::Serialize serialize(file_name.concat(".xml"), {});
                 serialize.run_on_model(model);
             };
@@ -293,6 +297,7 @@ public:
 private:
     static std::filesystem::path gen_file_name(const std::string& model_name,
                                                const std::string& pass_name,
+                                               bool path_changed_model,
                                                const size_t idx) {
         // visualizations and serializations will be named after the outermost function
         std::string index_str = std::to_string(idx);
@@ -300,7 +305,7 @@ private:
         index_str = std::string(num_digits_in_pass_index, '0') + index_str;
 
         std::filesystem::path file_name{model_name};
-        file_name += "_" + index_str + "_" + pass_name;
+        file_name += "_" + index_str + "_" + pass_name + (path_changed_model ? "_changed" : "_unchanged");
         return file_name;
     }
 
@@ -372,8 +377,8 @@ bool ov::pass::Manager::run_passes(const std::shared_ptr<ov::Model>& model) {
         manager_changed_model = manager_changed_model || pass_changed_model;
         needs_validation = (ov::as_type_ptr<ov::pass::Validate>(pass)) ? false : needs_validation || pass_changed_model;
 
-        profiler.visualize(model, pass_name);
-        profiler.serialize(model, pass_name);
+        profiler.visualize(model, pass_name, pass_changed_model);
+        profiler.serialize(model, pass_name, pass_changed_model);
     }
     profiler.stop_timer(m_name, manager_changed_model);
 
