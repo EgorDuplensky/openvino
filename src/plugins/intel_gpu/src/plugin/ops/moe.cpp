@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include "openvino/op/moe.hpp"
+
+#include <intel_gpu/primitives/eltwise.hpp>
+#include <intel_gpu/primitives/moe_gather.hpp>
+#include <intel_gpu/primitives/moe_scatter_reduction.hpp>
+#include <intel_gpu/primitives/swiglu.hpp>
+#include <limits>
+
 #include "ov_ops/moe_compressed.hpp"
 #include "intel_gpu/plugin/program_builder.hpp"
 #include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"

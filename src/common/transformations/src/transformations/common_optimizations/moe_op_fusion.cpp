@@ -151,6 +151,7 @@ Convert3GatherMatmulMoeBlockToMoeOp::Convert3GatherMatmulMoeBlockToMoeOp(size_t 
                 group_compressed ? weight_shape[2] * weight_shape[3] : weight_shape[2],
                 weight_shape[1],
                 weight_shape[0],
+                0,  // num_shared_expert
                 static_cast<size_t>(topk_shape[1].get_length()),
                 group_compressed ? weight_shape[3] : std::numeric_limits<size_t>::max(),
                 has_batch_dim,
@@ -319,6 +320,7 @@ Convert2GatherMatmulMoeBlockToMoeOp::Convert2GatherMatmulMoeBlockToMoeOp(size_t 
                 hidden,
                 weight_shape[1],
                 weight_shape[0],
+                0,  // num_shared_expert
                 static_cast<size_t>(topk_indices_shape[topk_rank - 1].get_length()),
                 group_compressed ? weight_shape[3] : std::numeric_limits<size_t>::max(),
                 has_batch_dim,
